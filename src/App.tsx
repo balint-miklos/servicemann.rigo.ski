@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect } from "react";
 import {
   Activity,
   Clock,
@@ -56,7 +56,6 @@ const Heatmap = ({ sessions }: { sessions: Session[] }) => {
   const dailyData = useMemo(() => {
     const map = new Map<string, number>();
     sessions.forEach((s) => {
-      // Use raw UTC string date part to avoid timezone shifts
       const day = s.date.split("T")[0];
       map.set(day, (map.get(day) || 0) + s.durationMinutes);
     });
@@ -66,11 +65,9 @@ const Heatmap = ({ sessions }: { sessions: Session[] }) => {
   const dates = sessions.map((s) => new Date(s.date));
   const extent = d3.extent(dates) as [Date, Date];
 
-  // Grid range using UTC to match raw data strings
   const startDate = d3.utcMonth.floor(extent[0] || new Date());
   const endDate = d3.utcMonth.ceil(extent[1] || new Date());
 
-  // Use utcMonday to ensure we are calculating weeks starting on Monday
   const gridStart = d3.utcMonday.floor(startDate);
   const allDays = d3.utcDays(startDate, endDate);
   const maxMins = d3.max(Array.from(dailyData.values())) || 1;
@@ -80,14 +77,11 @@ const Heatmap = ({ sessions }: { sessions: Session[] }) => {
     .domain([0, maxMins])
     .interpolator(d3.interpolateBlues);
 
-  // Responsive Sizing
-  // Desktop is significantly larger now to use space better
   const cellSize = isMobile ? 36 : 22;
   const cellPadding = isMobile ? 6 : 5;
   const totalCellSize = cellSize + cellPadding;
 
   if (isMobile) {
-    // Mobile View: Full-width Vertical list of weeks starting Monday
     return (
       <div className="w-full space-y-4">
         <div className="flex justify-between items-center px-2 text-[10px] text-slate-400 uppercase font-bold border-b border-slate-100 pb-2">
@@ -123,7 +117,6 @@ const Heatmap = ({ sessions }: { sessions: Session[] }) => {
                         backgroundColor: val > 0 ? colorScale(val) : "#f1f5f9",
                         opacity: isInSeason ? 1 : 0.05,
                       }}
-                      title={`${formatDate(day)}: ${val} mins`}
                     />
                   );
                 })}
@@ -135,7 +128,6 @@ const Heatmap = ({ sessions }: { sessions: Session[] }) => {
     );
   }
 
-  // Desktop View: Wide Month Columns with every weekday listed
   const weeksCount = d3.utcMondays(gridStart, endDate).length;
   const margin = { top: 40, right: 30, bottom: 20, left: 60 };
   const svgWidth =
@@ -154,7 +146,6 @@ const Heatmap = ({ sessions }: { sessions: Session[] }) => {
     <div className="w-full overflow-x-auto py-4 scrollbar-hide">
       <svg width={svgWidth} height={svgHeight} className="mx-auto block">
         <g transform={`translate(${margin.left}, ${margin.top})`}>
-          {/* Month Labels */}
           {monthLabels.map((m, i) => (
             <text
               key={i}
@@ -165,29 +156,22 @@ const Heatmap = ({ sessions }: { sessions: Session[] }) => {
               {m.label}
             </text>
           ))}
-
-          {/* Weekday Labels (All 7 Days) */}
-          {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d, i) => {
-            return (
-              <text
-                key={d}
-                x="-15"
-                y={i * totalCellSize + cellSize / 1.4}
-                textAnchor="end"
-                className="fill-slate-400 text-[11px] font-bold tracking-tight"
-              >
-                {d}
-              </text>
-            );
-          })}
-
-          {/* Activity Cells */}
+          {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d, i) => (
+            <text
+              key={d}
+              x="-15"
+              y={i * totalCellSize + cellSize / 1.4}
+              textAnchor="end"
+              className="fill-slate-400 text-[11px] font-bold"
+            >
+              {d}
+            </text>
+          ))}
           {allDays.map((day) => {
             const weekIdx = d3.utcMonday.count(gridStart, day);
-            const dayIdx = (day.getUTCDay() + 6) % 7; // Monday = 0, Sunday = 6
+            const dayIdx = (day.getUTCDay() + 6) % 7;
             const val = dailyData.get(formatDate(day)) || 0;
             const isInSeason = day >= extent[0] && day <= extent[1];
-
             return (
               <rect
                 key={day.toString()}
@@ -214,7 +198,6 @@ const Heatmap = ({ sessions }: { sessions: Session[] }) => {
   );
 };
 
-// --- MAIN APP ---
 export default function App() {
   const [expandedSeason, setExpandedSeason] = useState<string | null>(null);
 
@@ -257,7 +240,6 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#fbfcfd] p-4 md:p-12 font-sans text-slate-900">
       <div className="max-w-6xl mx-auto space-y-8">
-        {/* Header */}
         <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
           <div className="space-y-1">
             <h1 className="text-4xl md:text-5xl font-black tracking-tight text-slate-900 italic uppercase">
@@ -271,7 +253,6 @@ export default function App() {
           </div>
         </header>
 
-        {/* KPIs */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {[
             {
@@ -312,7 +293,6 @@ export default function App() {
           ))}
         </div>
 
-        {/* Activity Section */}
         <div className="space-y-6">
           <div className="flex items-center gap-3 px-2">
             <div className="p-2 bg-slate-900 rounded-lg">
@@ -372,10 +352,9 @@ export default function App() {
                     <div className="pt-8 border-t border-slate-100">
                       <Heatmap sessions={stats.items} />
                     </div>
-
                     <div className="mt-10 grid grid-cols-2 md:grid-cols-4 gap-3 pt-8 border-t border-slate-100">
                       <div className="col-span-full mb-2">
-                        <span className="text-[11px] font-black uppercase text-slate-300 tracking-widest text-center">
+                        <span className="text-[11px] font-black uppercase text-slate-300 tracking-widest text-center block">
                           Season Insights
                         </span>
                       </div>
