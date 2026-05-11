@@ -18,6 +18,7 @@ interface Session {
   id: string;
   date: string;
   durationMinutes: number;
+  description: string;
   tags: string[];
 }
 
@@ -54,10 +55,15 @@ const Heatmap = ({ sessions }: { sessions: Session[] }) => {
   }, []);
 
   const dailyData = useMemo(() => {
-    const map = new Map<string, number>();
+    const map = new Map<string, { mins: number; items: Session[] }>();
     sessions.forEach((s) => {
+      // Use raw UTC string date part to avoid timezone shifts
       const day = s.date.split("T")[0];
-      map.set(day, (map.get(day) || 0) + s.durationMinutes);
+      const existing = map.get(day) || { mins: 0, items: [] };
+      map.set(day, {
+        mins: existing.mins + s.durationMinutes,
+        items: [...existing.items, s],
+      });
     });
     return map;
   }, [sessions]);
@@ -65,28 +71,43 @@ const Heatmap = ({ sessions }: { sessions: Session[] }) => {
   const dates = sessions.map((s) => new Date(s.date));
   const extent = d3.extent(dates) as [Date, Date];
 
+  // Grid range using UTC to match raw data strings
   const startDate = d3.utcMonth.floor(extent[0] || new Date());
   const endDate = d3.utcMonth.ceil(extent[1] || new Date());
 
   const gridStart = d3.utcMonday.floor(startDate);
   const allDays = d3.utcDays(startDate, endDate);
-  const maxMins = d3.max(Array.from(dailyData.values())) || 1;
+  const maxMins = d3.max(Array.from(dailyData.values()), (d) => d.mins) || 1;
 
   const colorScale = d3
     .scaleSequential()
     .domain([0, maxMins])
     .interpolator(d3.interpolateBlues);
 
-  const cellSize = isMobile ? 36 : 22;
-  const cellPadding = isMobile ? 6 : 5;
+  const cellSize = isMobile ? 36 : 24;
+  const cellPadding = 6;
   const totalCellSize = cellSize + cellPadding;
+
+  const getTooltipContent = (day: Date) => {
+    const dateStr = formatDate(day);
+    const data = dailyData.get(dateStr);
+    if (!data) return dateStr;
+
+    const sessionLines = data.items.map((s) => {
+      const tags = s.tags.length > 0 ? ` [${s.tags.join(", ")}]` : "";
+      const desc = s.description ? `: ${s.description}` : "";
+      return `${s.durationMinutes}m${desc}${tags}`;
+    });
+
+    return `${dateStr}\nTotal duration: ${data.mins} mins\n\nSessions:\n${sessionLines.join("\n")}`;
+  };
 
   if (isMobile) {
     return (
       <div className="w-full space-y-4">
-        <div className="flex justify-between items-center px-2 text-[10px] text-slate-400 uppercase font-bold border-b border-slate-100 pb-2">
+        <div className="flex justify-between items-center px-2 text-[10px] text-slate-400 uppercase font-black border-b border-slate-100 pb-2 tracking-widest">
           <div className="w-12 text-left">Week</div>
-          <div className="flex-1 flex justify-between max-w-[290px] mx-auto w-full px-2">
+          <div className="flex-1 flex justify-between max-w-[300px] mx-auto w-full px-2">
             {["M", "T", "W", "T", "F", "S", "S"].map((d) => (
               <div key={d} style={{ width: cellSize }} className="text-center">
                 {d}
@@ -100,23 +121,26 @@ const Heatmap = ({ sessions }: { sessions: Session[] }) => {
               key={monday.toString()}
               className="flex items-center justify-between"
             >
-              <div className="w-12 text-[10px] text-slate-300 tabular-nums leading-tight">
+              <div className="w-12 text-[10px] text-slate-300 tabular-nums font-bold">
                 {d3.utcFormat("%b %d")(monday)}
               </div>
-              <div className="flex-1 flex justify-between max-w-[290px] mx-auto w-full px-2">
+              <div className="flex-1 flex justify-between max-w-[300px] mx-auto w-full px-2">
                 {d3.utcDays(monday, d3.utcDay.offset(monday, 7)).map((day) => {
-                  const val = dailyData.get(formatDate(day)) || 0;
+                  const data = dailyData.get(formatDate(day));
                   const isInSeason = day >= extent[0] && day <= extent[1];
                   return (
                     <div
                       key={day.toString()}
-                      className="rounded-lg transition-all duration-300 shadow-sm"
+                      className="rounded-lg transition-all duration-300 shadow-sm cursor-help"
                       style={{
                         width: cellSize,
                         height: cellSize,
-                        backgroundColor: val > 0 ? colorScale(val) : "#f1f5f9",
+                        backgroundColor: data
+                          ? colorScale(data.mins)
+                          : "#f1f5f9",
                         opacity: isInSeason ? 1 : 0.05,
                       }}
+                      title={getTooltipContent(day)}
                     />
                   );
                 })}
@@ -129,7 +153,7 @@ const Heatmap = ({ sessions }: { sessions: Session[] }) => {
   }
 
   const weeksCount = d3.utcMondays(gridStart, endDate).length;
-  const margin = { top: 40, right: 30, bottom: 20, left: 60 };
+  const margin = { top: 50, right: 30, bottom: 20, left: 70 };
   const svgWidth =
     (weeksCount + 1) * totalCellSize + margin.left + margin.right;
   const svgHeight = 7 * totalCellSize + margin.top + margin.bottom;
@@ -143,35 +167,38 @@ const Heatmap = ({ sessions }: { sessions: Session[] }) => {
   });
 
   return (
-    <div className="w-full overflow-x-auto py-4 scrollbar-hide">
+    <div className="w-full overflow-x-auto py-6 scrollbar-hide">
       <svg width={svgWidth} height={svgHeight} className="mx-auto block">
         <g transform={`translate(${margin.left}, ${margin.top})`}>
           {monthLabels.map((m, i) => (
             <text
               key={i}
               x={m.x}
-              y="-15"
-              className="fill-slate-500 text-[12px] font-black uppercase tracking-[0.2em]"
+              y="-20"
+              className="fill-slate-500 text-[13px] font-black uppercase tracking-[0.25em]"
             >
               {m.label}
             </text>
           ))}
+
           {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d, i) => (
             <text
               key={d}
               x="-15"
               y={i * totalCellSize + cellSize / 1.4}
               textAnchor="end"
-              className="fill-slate-400 text-[11px] font-bold"
+              className="fill-slate-400 text-[11px] font-black uppercase tracking-tight"
             >
               {d}
             </text>
           ))}
+
           {allDays.map((day) => {
             const weekIdx = d3.utcMonday.count(gridStart, day);
-            const dayIdx = (day.getUTCDay() + 6) % 7;
-            const val = dailyData.get(formatDate(day)) || 0;
+            const dayIdx = (day.getUTCDay() + 6) % 7; // Monday = 0, Sunday = 6
+            const data = dailyData.get(formatDate(day));
             const isInSeason = day >= extent[0] && day <= extent[1];
+
             return (
               <rect
                 key={day.toString()}
@@ -179,16 +206,14 @@ const Heatmap = ({ sessions }: { sessions: Session[] }) => {
                 y={dayIdx * totalCellSize}
                 width={cellSize}
                 height={cellSize}
-                rx={6}
-                fill={val > 0 ? colorScale(val) : "#f8fafc"}
-                className="transition-all duration-300 hover:stroke-blue-400 hover:stroke-2 cursor-pointer"
-                stroke="#e2e8f0"
-                strokeWidth={val > 0 ? 0 : 1}
+                rx={7}
+                fill={data ? colorScale(data.mins) : "#f8fafc"}
+                className="transition-all duration-300 hover:stroke-blue-400 hover:stroke-[3px] cursor-help"
+                stroke="#eef2f6"
+                strokeWidth={data ? 0 : 1}
                 opacity={isInSeason ? 1 : 0.15}
               >
-                <title>
-                  {formatDate(day)}: {val} mins
-                </title>
+                <title>{getTooltipContent(day)}</title>
               </rect>
             );
           })}
@@ -198,6 +223,7 @@ const Heatmap = ({ sessions }: { sessions: Session[] }) => {
   );
 };
 
+// --- MAIN APP ---
 export default function App() {
   const [expandedSeason, setExpandedSeason] = useState<string | null>(null);
 
@@ -239,36 +265,42 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#fbfcfd] p-4 md:p-12 font-sans text-slate-900">
-      <div className="max-w-6xl mx-auto space-y-8">
-        <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+      <div className="max-w-7xl mx-auto space-y-10">
+        {/* Header */}
+        <header className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-slate-100 pb-8">
           <div className="space-y-1">
-            <h1 className="text-4xl md:text-5xl font-black tracking-tight text-slate-900 italic uppercase">
+            <h1 className="text-5xl md:text-6xl font-black tracking-tighter text-slate-900 italic uppercase">
               Servicemann
             </h1>
-            <p className="text-slate-400 text-xs font-bold flex items-center gap-2 uppercase tracking-tighter">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]"></span>
-              Live Synced •{" "}
-              {new Date(typedData.lastUpdated).toLocaleDateString()}
+            <p className="text-slate-400 text-xs font-black flex items-center gap-2 uppercase tracking-[0.2em]">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.8)]"></span>
+              Live Sync •{" "}
+              {new Date(typedData.lastUpdated).toLocaleDateString(undefined, {
+                month: "long",
+                day: "numeric",
+                year: "numeric",
+              })}
             </p>
           </div>
         </header>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {/* KPIs */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {[
             {
-              label: "Sessions",
+              label: "Total Sessions",
               val: totalSessions,
               icon: Activity,
               color: "blue",
             },
             {
-              label: "Service Time",
+              label: "Workshop Hours",
               val: `${totalHours}h`,
               icon: Clock,
               color: "emerald",
             },
             {
-              label: "Categories",
+              label: "Category Focus",
               val: typedData.availableTags.length || "Base",
               icon: Tag,
               color: "indigo",
@@ -276,86 +308,90 @@ export default function App() {
           ].map((kpi) => (
             <div
               key={kpi.label}
-              className="bg-white p-6 rounded-[2rem] shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-slate-50 flex items-center space-x-5"
+              className="bg-white p-8 rounded-[2.5rem] shadow-[0_10px_40px_rgb(0,0,0,0.04)] border border-slate-50 flex items-center space-x-6"
             >
               <div
-                className={`bg-${kpi.color}-50 p-4 rounded-2xl text-${kpi.color}-600`}
+                className={`bg-${kpi.color}-50 p-5 rounded-2xl text-${kpi.color}-600`}
               >
-                <kpi.icon size={28} strokeWidth={2.5} />
+                <kpi.icon size={32} strokeWidth={2.5} />
               </div>
               <div>
-                <p className="text-[11px] font-black uppercase tracking-widest text-slate-300 leading-none mb-1.5">
+                <p className="text-[12px] font-black uppercase tracking-widest text-slate-300 leading-none mb-2">
                   {kpi.label}
                 </p>
-                <p className="text-3xl font-black leading-none">{kpi.val}</p>
+                <p className="text-4xl font-black leading-none tracking-tight">
+                  {kpi.val}
+                </p>
               </div>
             </div>
           ))}
         </div>
 
-        <div className="space-y-6">
-          <div className="flex items-center gap-3 px-2">
-            <div className="p-2 bg-slate-900 rounded-lg">
-              <CalendarDays className="text-white" size={18} />
+        {/* Activity Section */}
+        <div className="space-y-8">
+          <div className="flex items-center gap-4 px-2">
+            <div className="p-3 bg-slate-900 rounded-xl shadow-lg">
+              <CalendarDays className="text-white" size={20} />
             </div>
-            <h2 className="text-xl font-black uppercase tracking-tight">
-              Activity Log
+            <h2 className="text-2xl font-black uppercase tracking-tight italic">
+              Performance Log
             </h2>
           </div>
 
-          <div className="grid grid-cols-1 gap-6">
+          <div className="grid grid-cols-1 gap-8">
             {seasons.map(([season, stats]) => (
               <div
                 key={season}
-                className="bg-white rounded-[2.5rem] shadow-[0_20px_50px_rgba(0,0,0,0.03)] border border-slate-50 overflow-hidden"
+                className="bg-white rounded-[3rem] shadow-[0_25px_60px_rgba(0,0,0,0.04)] border border-slate-50 overflow-hidden"
               >
                 <button
                   onClick={() =>
                     setExpandedSeason(expandedSeason === season ? null : season)
                   }
-                  className="w-full p-6 md:p-8 flex items-center justify-between hover:bg-slate-50/50 transition-all"
+                  className="w-full p-8 md:p-10 flex items-center justify-between hover:bg-slate-50/50 transition-all group"
                 >
-                  <div className="flex items-center gap-6">
-                    <div className="w-14 h-14 bg-slate-900 text-white rounded-2xl flex items-center justify-center font-black text-xl shadow-lg shadow-slate-200">
+                  <div className="flex items-center gap-8">
+                    <div className="w-16 h-16 bg-slate-900 text-white rounded-2xl flex items-center justify-center font-black text-2xl shadow-xl shadow-slate-200 group-hover:scale-105 transition-transform">
                       {season}
                     </div>
                     <div className="text-left">
-                      <h3 className="font-black text-2xl tracking-tight uppercase">
+                      <h3 className="font-black text-3xl tracking-tight uppercase italic">
                         Season {season}
                       </h3>
-                      <p className="text-sm font-bold text-slate-400">
-                        {stats.sessions} workshop sessions
+                      <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">
+                        {stats.sessions} recorded services
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-8">
+                  <div className="flex items-center gap-10">
                     <div className="hidden md:block text-right">
-                      <p className="text-xl font-black italic">
+                      <p className="text-2xl font-black italic">
                         {(stats.minutes / 60).toFixed(1)} hrs
                       </p>
-                      <p className="text-[10px] font-black uppercase text-slate-300 tracking-tighter">
-                        Total Duration
+                      <p className="text-[10px] font-black uppercase text-slate-300 tracking-[0.2em]">
+                        Season Volume
                       </p>
                     </div>
-                    <div className="p-2 bg-slate-50 rounded-full">
+                    <div className="p-3 bg-slate-50 rounded-full group-hover:bg-slate-100 transition-colors">
                       {expandedSeason === season ? (
-                        <ChevronDown size={24} />
+                        <ChevronDown size={28} />
                       ) : (
-                        <ChevronRight size={24} />
+                        <ChevronRight size={28} />
                       )}
                     </div>
                   </div>
                 </button>
 
                 {expandedSeason === season && (
-                  <div className="px-6 md:px-10 pb-10 animate-in fade-in slide-in-from-top-4 duration-500">
-                    <div className="pt-8 border-t border-slate-100">
+                  <div className="px-8 md:px-12 pb-12 animate-in fade-in slide-in-from-top-6 duration-700">
+                    <div className="pt-10 border-t border-slate-100">
                       <Heatmap sessions={stats.items} />
                     </div>
-                    <div className="mt-10 grid grid-cols-2 md:grid-cols-4 gap-3 pt-8 border-t border-slate-100">
-                      <div className="col-span-full mb-2">
-                        <span className="text-[11px] font-black uppercase text-slate-300 tracking-widest text-center block">
-                          Season Insights
+
+                    <div className="mt-12 grid grid-cols-2 md:grid-cols-4 gap-4 pt-10 border-t border-slate-100">
+                      <div className="col-span-full mb-4">
+                        <span className="text-[12px] font-black uppercase text-slate-300 tracking-[0.3em] text-center block">
+                          Detailed Insights
                         </span>
                       </div>
                       {[
@@ -364,11 +400,11 @@ export default function App() {
                           val: `${Math.round(stats.minutes / stats.sessions)}m`,
                         },
                         {
-                          label: "Peak Day",
+                          label: "Longest Service",
                           val: `${d3.max(stats.items, (d) => d.durationMinutes)}m`,
                         },
                         {
-                          label: "Busy Month",
+                          label: "Peak Month",
                           val: d3
                             .groups(stats.items, (d) =>
                               d3.utcFormat("%B")(new Date(d.date)),
@@ -376,18 +412,20 @@ export default function App() {
                             .sort((a, b) => b[1].length - a[1].length)[0][0],
                         },
                         {
-                          label: "Frequency",
+                          label: "Freq Index",
                           val: `${(stats.sessions / 30).toFixed(1)}/mo`,
                         },
                       ].map((stat) => (
                         <div
                           key={stat.label}
-                          className="bg-slate-50/50 p-4 rounded-2xl border border-slate-100"
+                          className="bg-slate-50/50 p-6 rounded-[2rem] border border-slate-100 hover:bg-white hover:shadow-md transition-all"
                         >
-                          <p className="text-[9px] font-black uppercase text-slate-400 mb-1">
+                          <p className="text-[10px] font-black uppercase text-slate-400 mb-2 tracking-tighter">
                             {stat.label}
                           </p>
-                          <p className="text-base font-black">{stat.val}</p>
+                          <p className="text-xl font-black italic">
+                            {stat.val}
+                          </p>
                         </div>
                       ))}
                     </div>

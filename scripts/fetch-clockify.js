@@ -2,19 +2,11 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
-/**
- * PHASE 1: Clockify Data Extraction
- * Fetches all time entries from your workspace and saves them to src/data/data.json.
- */
-
-// Reconstruct __dirname in ES module scope
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Try to load local .env file natively (available in Node v20.6+)
 try {
   process.loadEnvFile(path.join(__dirname, "../.env"));
-  console.log("Loaded .env file successfully.");
 } catch (err) {
   console.warn("Notice: Could not load .env file:", err.message);
 }
@@ -30,76 +22,82 @@ async function fetchAllTimeEntries() {
     );
   }
 
-  console.log("Starting data extraction from Clockify...");
+  const headers = { "X-Api-Key": API_KEY };
 
-  // 1. Get the current user's ID first
-  const userResponse = await fetch(`${BASE_URL}/user`, {
-    headers: { "X-Api-Key": API_KEY },
-  });
-
-  if (!userResponse.ok) {
-    const errText = await userResponse.text();
-    throw new Error(
-      `Failed to fetch user data: ${userResponse.statusText} - ${errText}`,
-    );
+  // 1. FETCH TAG LOOKUP TABLE
+  // Clockify often returns tagIds in entries, so we need a map of ID -> Name
+  console.log("Fetching tags for workspace...");
+  const tagsResponse = await fetch(
+    `${BASE_URL}/workspaces/${WORKSPACE_ID}/tags?page-size=1000`,
+    { headers },
+  );
+  const tagsData = await tagsResponse.json();
+  const tagMap = {};
+  if (Array.isArray(tagsData)) {
+    tagsData.forEach((t) => {
+      tagMap[t.id] = t.name;
+    });
   }
 
+  // 2. GET USER ID
+  const userResponse = await fetch(`${BASE_URL}/user`, { headers });
   const userData = await userResponse.json();
   const userId = userData.id;
-  console.log(`Authenticated as User ID: ${userId}`);
 
-  // 2. Fetch the time entries using the real User ID
   let allEntries = [];
   let page = 1;
   let hasMore = true;
 
+  console.log("Fetching time entries...");
   while (hasMore) {
     const response = await fetch(
       `${BASE_URL}/workspaces/${WORKSPACE_ID}/user/${userId}/time-entries?page=${page}&page-size=50`,
-      {
-        headers: { "X-Api-Key": API_KEY },
-      },
+      { headers },
     );
-
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(
-        `Clockify API error: ${response.statusText} - ${errText}`,
-      );
-    }
-
     const entries = await response.json();
 
-    if (entries.length === 0) {
+    if (!Array.isArray(entries) || entries.length === 0) {
       hasMore = false;
     } else {
-      // Map raw entries to our lightweight schema
+      // DEBUG: Log the first entry of the first page to see the structure
+      if (page === 1) {
+        console.log("Debug: Sample entry keys:", Object.keys(entries[0]));
+        console.log("Debug: Sample entry tags/tagIds:", {
+          tags: entries[0].tags,
+          tagIds: entries[0].tagIds,
+        });
+      }
+
       const mapped = entries.map((entry) => {
-        // Calculate duration in minutes
         const start = new Date(entry.timeInterval.start);
         const end = new Date(entry.timeInterval.end);
         const durationMinutes = Math.round((end - start) / 60000);
+
+        // Logic: Try 'tags' objects first, then fallback to 'tagIds' mapped via our tagMap
+        let sessionTags = [];
+        if (entry.tags && entry.tags.length > 0) {
+          sessionTags = entry.tags.map((t) => t.name);
+        } else if (entry.tagIds && entry.tagIds.length > 0) {
+          sessionTags = entry.tagIds.map((id) => tagMap[id] || id);
+        }
 
         return {
           id: entry.id,
           date: entry.timeInterval.start,
           durationMinutes,
-          tags: entry.tags ? entry.tags.map((t) => t.name.toLowerCase()) : [],
+          description: entry.description || "",
+          tags: sessionTags,
         };
       });
 
-      // Filter out any entries that might have 0 duration or are actively running
       const validEntries = mapped.filter(
         (e) => e.durationMinutes > 0 && !isNaN(e.durationMinutes),
       );
-
       allEntries = [...allEntries, ...validEntries];
-      console.log(`Fetched page ${page} (${validEntries.length} entries)`);
       page++;
     }
   }
 
-  // Extract unique tags for the frontend filter list
   const availableTags = [...new Set(allEntries.flatMap((e) => e.tags))].sort();
 
   const output = {
@@ -108,20 +106,15 @@ async function fetchAllTimeEntries() {
     sessions: allEntries,
   };
 
-  // Ensure the src/data directory exists before writing
   const dir = path.join(__dirname, "../src/data");
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, "data.json"),
     JSON.stringify(output, null, 2),
   );
 
-  console.log(
-    `Success! Saved ${allEntries.length} sessions to src/data/data.json`,
-  );
+  console.log(`Success! Saved ${allEntries.length} sessions.`);
+  console.log(`Discovered tags: ${availableTags.join(", ") || "None"}`);
 }
 
 fetchAllTimeEntries().catch((err) => {
