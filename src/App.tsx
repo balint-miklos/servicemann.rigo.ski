@@ -110,20 +110,6 @@ const Heatmap = ({
   const cellPadding = 6;
   const totalCellSize = cellSize + cellPadding;
 
-  const getTooltipContent = (day: Date) => {
-    const dateStr = formatDate(day);
-    const data = dailyData.get(dateStr);
-    if (!data) return dateStr;
-
-    const sessionLines = data.items.map((s) => {
-      const tags = s.tags.length > 0 ? ` [${s.tags.join(", ")}]` : "";
-      const desc = s.description ? `: ${s.description}` : "";
-      return `${s.durationMinutes}m${desc}${tags}`;
-    });
-
-    return `${dateStr}\nTotal duration: ${data.mins} mins\n\nSessions:\n${sessionLines.join("\n")}`;
-  };
-
   const handleMouseEnter = (
     e: React.MouseEvent<SVGRectElement>,
     dateStr: string,
@@ -165,13 +151,23 @@ const Heatmap = ({
     }
   };
 
-  if (isMobile) {
-    // Reverse chronological weeks (May down to November)
-    const mondays = d3.utcMondays(gridStart, endDate).reverse();
+  // Filter out any trailing weeks that occur completely after the very last service week
+  const prunedMondays = useMemo(() => {
+    if (isMobile) {
+      const lastSessionMonday = extent[1]
+        ? d3.utcMonday.floor(extent[1])
+        : new Date();
+      const activeEndDate = d3.utcDay.offset(lastSessionMonday, 7);
+      return d3.utcMondays(gridStart, activeEndDate).reverse();
+    }
+    return [];
+  }, [gridStart, extent, isMobile]);
 
+  if (isMobile) {
     return (
-      <div className="w-full space-y-4 relative heatmap-container">
-        <div className="flex justify-between items-center px-2 text-[10px] text-slate-400 uppercase font-black border-b border-slate-100 pb-2 tracking-widest">
+      <div className="w-full relative heatmap-container">
+        {/* Sticky floating header on mobile that sits directly under page branding bar */}
+        <div className="sticky top-[58px] bg-[#fbfcfd]/90 backdrop-blur-md z-35 py-3 -mx-4 px-4 flex justify-between items-center text-[10px] text-slate-400 uppercase font-black border-b border-slate-100 tracking-widest transition-all">
           <div className="w-20 text-left">Week Range</div>
           <div className="flex-1 flex justify-between max-w-[280px] mx-auto w-full px-1">
             {["M", "T", "W", "T", "F", "S", "S"].map((d) => (
@@ -181,8 +177,9 @@ const Heatmap = ({
             ))}
           </div>
         </div>
-        <div className="space-y-3">
-          {mondays.map((monday) => (
+
+        <div className="space-y-3 pt-3">
+          {prunedMondays.map((monday) => (
             <div
               key={monday.toString()}
               className="flex items-center justify-between"
@@ -198,13 +195,17 @@ const Heatmap = ({
                     <div
                       key={day.toString()}
                       onClick={(e) => handleCellClick(e, formatDate(day), data)}
-                      className={`rounded-lg transition-all duration-300 shadow-sm ${data ? "cursor-pointer active:scale-95" : "pointer-events-none"}`}
+                      className={`rounded-lg transition-all duration-300 border ${
+                        data
+                          ? "cursor-pointer active:scale-95 border-transparent shadow-xs"
+                          : "pointer-events-none border-slate-200/40"
+                      }`}
                       style={{
                         width: cellSize,
                         height: cellSize,
                         backgroundColor: data
                           ? colorScale(data.mins)
-                          : "#f1f5f9",
+                          : "#ffffff",
                         opacity: isInSeason ? 1 : 0.08,
                       }}
                     />
@@ -215,7 +216,6 @@ const Heatmap = ({
           ))}
         </div>
 
-        {/* Mobile bottom-drawer sheet */}
         {activeTooltip && isMobile && (
           <div
             className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 flex items-end justify-center p-4 animate-in fade-in duration-200"
@@ -286,7 +286,6 @@ const Heatmap = ({
     );
   }
 
-  // Desktop horizontal flow
   const weeksCount = d3.utcMondays(gridStart, endDate).length;
   const margin = { top: 50, right: 30, bottom: 20, left: 70 };
   const svgWidth =
@@ -342,11 +341,11 @@ const Heatmap = ({
                 width={cellSize}
                 height={cellSize}
                 rx={7}
-                fill={data ? colorScale(data.mins) : "#f8fafc"}
+                fill={data ? colorScale(data.mins) : "#ffffff"}
                 onMouseEnter={(e) => handleMouseEnter(e, formatDate(day), data)}
                 onMouseLeave={handleMouseLeave}
                 className="transition-all duration-300 hover:stroke-blue-400 hover:stroke-[3px] cursor-help"
-                stroke="#eef2f6"
+                stroke={data ? "none" : "#e2e8f0"}
                 strokeWidth={data ? 0 : 1}
                 opacity={isInSeason ? 1 : 0.15}
               />
@@ -355,7 +354,6 @@ const Heatmap = ({
         </g>
       </svg>
 
-      {/* Desktop hovered tooltip */}
       {activeTooltip && !isMobile && (
         <div
           className="absolute z-50 bg-white/95 backdrop-blur-md border border-slate-100 p-4 rounded-2xl shadow-xl w-80 pointer-events-none transition-all duration-150"
@@ -366,7 +364,6 @@ const Heatmap = ({
             marginTop: "-10px",
           }}
         >
-          {/* Header */}
           <div className="flex justify-between items-start gap-4 mb-2">
             <div>
               <h4 className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">
@@ -387,7 +384,6 @@ const Heatmap = ({
 
           <div className="border-t border-slate-100 my-2"></div>
 
-          {/* Session list */}
           <div className="space-y-3">
             {activeTooltip.items.map((item, idx) => (
               <div key={idx} className="text-xs space-y-1">
@@ -430,6 +426,21 @@ export default function App() {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
+  const lastSyncStr = useMemo(() => {
+    const d = new Date(typedData.lastUpdated);
+    const datePart = d.toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+    const timePart = d.toLocaleTimeString(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    return `last sync on ${datePart}, ${timePart}`;
+  }, []);
+
   const seasonsData = useMemo(() => {
     const seasonMap: Record<
       string,
@@ -450,14 +461,12 @@ export default function App() {
     );
 
     return sortedSeasons.map(([season, data]) => {
-      // Calculate Scorecard metrics
       const totalSessions = data.sessions.length;
       const totalHours = (data.totalMins / 60).toFixed(1);
       const avgMinutes = totalSessions
         ? Math.round(data.totalMins / totalSessions)
         : 0;
 
-      // Longest Service + Date
       let longestServiceStr = "-";
       if (totalSessions > 0) {
         const longest = data.sessions.reduce(
@@ -469,7 +478,6 @@ export default function App() {
         longestServiceStr = `${longest.durationMinutes}m (${longestDate})`;
       }
 
-      // Peak Month (busiest by sessions count)
       let peakMonthStr = "-";
       if (totalSessions > 0) {
         const monthGroups = d3.groups(data.sessions, (s) =>
@@ -481,7 +489,6 @@ export default function App() {
         peakMonthStr = `${peakMonthName} (${peakMonthCount} sess.)`;
       }
 
-      // Sessions per week velocity
       let sessionsPerWeekStr = "-";
       if (totalSessions > 0) {
         const dates = data.sessions.map((s) => new Date(s.date));
@@ -534,30 +541,25 @@ export default function App() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-[#fbfcfd] p-4 md:p-12 font-sans text-slate-900">
-      <div className="max-w-7xl mx-auto space-y-12">
-        {/* Header */}
-        <header className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-slate-100 pb-8">
-          <div className="space-y-1">
-            <h1 className="text-5xl md:text-6xl font-black tracking-tighter text-slate-900 italic uppercase">
-              Servicemann
+    <div className="min-h-screen bg-[#fbfcfd] px-4 py-0 md:p-12 font-sans text-slate-900">
+      <div className="max-w-7xl mx-auto space-y-4 md:space-y-12">
+        {/* Header (Sticky floating bar on mobile) */}
+        <header className="sticky top-0 bg-[#fbfcfd]/90 backdrop-blur-md z-40 pt-4 pb-2 -mx-4 px-4 border-b border-slate-100/60 md:static md:bg-transparent md:backdrop-blur-none md:p-0 md:m-0 md:border-b-0 md:pb-8">
+          <div className="space-y-0.5">
+            <h1 className="text-3xl md:text-5xl font-black tracking-tighter text-slate-950 italic lowercase leading-none">
+              servicemann.rigo.ski
             </h1>
-            <p className="text-slate-400 text-xs font-black flex items-center gap-2 uppercase tracking-[0.2em]">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.8)]"></span>
-              Live Sync •{" "}
-              {new Date(typedData.lastUpdated).toLocaleDateString(undefined, {
-                month: "long",
-                day: "numeric",
-                year: "numeric",
-              })}
+            <p className="text-slate-400 text-[10px] md:text-xs font-semibold flex items-center gap-1.5 tracking-[0.05em] normal-case leading-none">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.8)]"></span>
+              {lastSyncStr}
             </p>
           </div>
         </header>
 
         {/* Live Workshop Activity Feed */}
-        <div className="space-y-16">
+        <div className="space-y-10 md:space-y-16">
           {seasonsData.map(({ season, sessions, metrics }) => (
-            <section key={season} className="space-y-8">
+            <section key={season} className="space-y-6 md:space-y-8">
               {/* Season Section Title (Desktop-only to keep mobile completely stream-focused) */}
               <div className="hidden md:flex items-center justify-between border-b border-slate-100 pb-3">
                 <h2 className="text-3xl font-black tracking-tight uppercase italic text-slate-900">
@@ -568,13 +570,13 @@ export default function App() {
                 </span>
               </div>
 
-              {/* Responsive Visual Heatmap Grid */}
-              <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-50 p-6 md:p-10">
+              {/* Visual Heatmap Grid (Compact layout padding) */}
+              <div className="py-0">
                 <Heatmap sessions={sessions} isMobile={isMobile} />
               </div>
 
-              {/* Compact scorecard: 6 items wide in a single row on desktop */}
-              <div className="space-y-4">
+              {/* Scorecard: 6 items wide in a single row on desktop */}
+              <div className="space-y-4 pt-4 md:pt-0">
                 <div className="px-2">
                   <span className="text-[11px] font-black uppercase text-slate-400 tracking-[0.25em]">
                     Season {season} Scorecard
