@@ -54,6 +54,14 @@ const Heatmap = ({
   sessions: Session[];
   isMobile: boolean;
 }) => {
+  const [activeTooltip, setActiveTooltip] = useState<{
+    dateStr: string;
+    mins: number;
+    items: Session[];
+    x: number;
+    y: number;
+  } | null>(null);
+
   const dailyData = useMemo(() => {
     const map = new Map<string, { mins: number; items: Session[] }>();
     sessions.forEach((s) => {
@@ -116,12 +124,53 @@ const Heatmap = ({
     return `${dateStr}\nTotal duration: ${data.mins} mins\n\nSessions:\n${sessionLines.join("\n")}`;
   };
 
+  const handleMouseEnter = (
+    e: React.MouseEvent<SVGRectElement>,
+    dateStr: string,
+    data: any,
+  ) => {
+    if (!data || isMobile) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const container = e.currentTarget
+      .closest(".heatmap-container")
+      ?.getBoundingClientRect();
+    if (rect && container) {
+      setActiveTooltip({
+        dateStr,
+        mins: data.mins,
+        items: data.items,
+        x: rect.left - container.left + rect.width / 2,
+        y: rect.top - container.top,
+      });
+    }
+  };
+
+  const handleMouseLeave = () => {
+    if (isMobile) return;
+    setActiveTooltip(null);
+  };
+
+  const handleCellClick = (e: React.MouseEvent, dateStr: string, data: any) => {
+    e.stopPropagation();
+    if (!data) return;
+
+    if (isMobile) {
+      setActiveTooltip({
+        dateStr,
+        mins: data.mins,
+        items: data.items,
+        x: 0,
+        y: 0,
+      });
+    }
+  };
+
   if (isMobile) {
     // Reverse chronological weeks (May down to November)
     const mondays = d3.utcMondays(gridStart, endDate).reverse();
 
     return (
-      <div className="w-full space-y-4">
+      <div className="w-full space-y-4 relative heatmap-container">
         <div className="flex justify-between items-center px-2 text-[10px] text-slate-400 uppercase font-black border-b border-slate-100 pb-2 tracking-widest">
           <div className="w-20 text-left">Week Range</div>
           <div className="flex-1 flex justify-between max-w-[280px] mx-auto w-full px-1">
@@ -148,7 +197,8 @@ const Heatmap = ({
                   return (
                     <div
                       key={day.toString()}
-                      className="rounded-lg transition-all duration-300 shadow-sm cursor-help"
+                      onClick={(e) => handleCellClick(e, formatDate(day), data)}
+                      className={`rounded-lg transition-all duration-300 shadow-sm ${data ? "cursor-pointer active:scale-95" : "pointer-events-none"}`}
                       style={{
                         width: cellSize,
                         height: cellSize,
@@ -157,7 +207,6 @@ const Heatmap = ({
                           : "#f1f5f9",
                         opacity: isInSeason ? 1 : 0.08,
                       }}
-                      title={getTooltipContent(day)}
                     />
                   );
                 })}
@@ -165,6 +214,74 @@ const Heatmap = ({
             </div>
           ))}
         </div>
+
+        {/* Mobile bottom-drawer sheet */}
+        {activeTooltip && isMobile && (
+          <div
+            className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 flex items-end justify-center p-4 animate-in fade-in duration-200"
+            onClick={() => setActiveTooltip(null)}
+          >
+            <div
+              className="bg-white w-full max-w-md rounded-[2rem] p-6 space-y-4 shadow-2xl animate-in slide-in-from-bottom duration-300"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex justify-between items-start">
+                <div>
+                  <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                    Servicemann Session
+                  </h4>
+                  <h3 className="text-xl font-black text-slate-900 leading-tight mt-0.5">
+                    {d3.utcFormat("%A, %b %d, %Y")(
+                      new Date(activeTooltip.dateStr + "T00:00:00Z"),
+                    )}
+                  </h3>
+                </div>
+                <div className="bg-blue-50 text-blue-600 px-3 py-1.5 rounded-full text-xs font-black uppercase">
+                  {activeTooltip.mins}m total
+                </div>
+              </div>
+
+              <div className="border-t border-slate-100 my-2"></div>
+
+              <div className="space-y-3 max-h-64 overflow-y-auto pr-1">
+                {activeTooltip.items.map((item, idx) => (
+                  <div
+                    key={idx}
+                    className="bg-slate-50/50 p-4 rounded-2xl border border-slate-100/50 space-y-2"
+                  >
+                    <div className="flex justify-between items-center gap-2">
+                      <span className="text-xs font-black text-slate-500 uppercase tracking-wider">
+                        {item.durationMinutes} mins
+                      </span>
+                      <div className="flex flex-wrap gap-1">
+                        {item.tags.map((t) => (
+                          <span
+                            key={t}
+                            className="bg-blue-100/60 text-blue-700 text-[8px] font-black px-1.5 py-0.5 rounded uppercase"
+                          >
+                            {t}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    {item.description && (
+                      <p className="text-sm text-slate-700 font-semibold leading-relaxed">
+                        {item.description}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <button
+                onClick={() => setActiveTooltip(null)}
+                className="w-full bg-slate-950 text-white font-black uppercase text-xs py-4 rounded-2xl hover:bg-slate-900 active:scale-[0.98] transition-all"
+              >
+                Close View
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -185,7 +302,7 @@ const Heatmap = ({
   });
 
   return (
-    <div className="w-full overflow-x-auto py-6 scrollbar-hide">
+    <div className="w-full overflow-x-auto py-6 relative scrollbar-hide heatmap-container">
       <svg width={svgWidth} height={svgHeight} className="mx-auto block">
         <g transform={`translate(${margin.left}, ${margin.top})`}>
           {monthLabels.map((m, i) => (
@@ -226,17 +343,79 @@ const Heatmap = ({
                 height={cellSize}
                 rx={7}
                 fill={data ? colorScale(data.mins) : "#f8fafc"}
+                onMouseEnter={(e) => handleMouseEnter(e, formatDate(day), data)}
+                onMouseLeave={handleMouseLeave}
                 className="transition-all duration-300 hover:stroke-blue-400 hover:stroke-[3px] cursor-help"
                 stroke="#eef2f6"
                 strokeWidth={data ? 0 : 1}
                 opacity={isInSeason ? 1 : 0.15}
-              >
-                <title>{getTooltipContent(day)}</title>
-              </rect>
+              />
             );
           })}
         </g>
       </svg>
+
+      {/* Desktop hovered tooltip */}
+      {activeTooltip && !isMobile && (
+        <div
+          className="absolute z-50 bg-white/95 backdrop-blur-md border border-slate-100 p-4 rounded-2xl shadow-xl w-80 pointer-events-none transition-all duration-150"
+          style={{
+            left: activeTooltip.x,
+            top: activeTooltip.y,
+            transform: "translate(-50%, -100%)",
+            marginTop: "-10px",
+          }}
+        >
+          {/* Header */}
+          <div className="flex justify-between items-start gap-4 mb-2">
+            <div>
+              <h4 className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">
+                {d3.utcFormat("%A")(
+                  new Date(activeTooltip.dateStr + "T00:00:00Z"),
+                )}
+              </h4>
+              <h3 className="text-sm font-black text-slate-950 mt-1">
+                {d3.utcFormat("%b %d, %Y")(
+                  new Date(activeTooltip.dateStr + "T00:00:00Z"),
+                )}
+              </h3>
+            </div>
+            <div className="bg-blue-50 text-blue-600 px-2 py-1 rounded-md text-[10px] font-black uppercase whitespace-nowrap">
+              {activeTooltip.mins}m total
+            </div>
+          </div>
+
+          <div className="border-t border-slate-100 my-2"></div>
+
+          {/* Session list */}
+          <div className="space-y-3">
+            {activeTooltip.items.map((item, idx) => (
+              <div key={idx} className="text-xs space-y-1">
+                <div className="flex justify-between items-start gap-2">
+                  <span className="font-black text-slate-800 uppercase tracking-wide">
+                    {item.durationMinutes} mins
+                  </span>
+                  <div className="flex flex-wrap gap-0.5 justify-end">
+                    {item.tags.map((t) => (
+                      <span
+                        key={t}
+                        className="bg-blue-50 text-blue-600 text-[8px] font-black px-1.5 py-0.5 rounded uppercase"
+                      >
+                        {t}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                {item.description && (
+                  <p className="text-slate-600 font-semibold leading-relaxed">
+                    {item.description}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -299,7 +478,7 @@ export default function App() {
         monthGroups.sort((a, b) => b[1].length - a[1].length);
         const peakMonthName = monthGroups[0][0];
         const peakMonthCount = monthGroups[0][1].length;
-        peakMonthStr = `${peakMonthName} (${peakMonthCount} sessions)`;
+        peakMonthStr = `${peakMonthName} (${peakMonthCount} sess.)`;
       }
 
       // Sessions per week velocity
@@ -311,7 +490,7 @@ export default function App() {
         const end = d3.utcMonth.ceil(extent[1] || new Date());
         const gridStart = d3.utcMonday.floor(start);
         const weeksCount = d3.utcMondays(gridStart, end).length || 1;
-        sessionsPerWeekStr = `${(totalSessions / weeksCount).toFixed(1)} / wk`;
+        sessionsPerWeekStr = `${(totalSessions / weeksCount).toFixed(2)} / wk`;
       }
 
       return {
@@ -332,7 +511,7 @@ export default function App() {
           },
           {
             label: "Avg Session",
-            val: `${avgMinutes} mins`,
+            val: `${avgMinutes}m`,
             icon: TrendingUp,
             color: "indigo",
           },
@@ -379,8 +558,8 @@ export default function App() {
         <div className="space-y-16">
           {seasonsData.map(({ season, sessions, metrics }) => (
             <section key={season} className="space-y-8">
-              {/* Season Section Title */}
-              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              {/* Season Section Title (Desktop-only to keep mobile completely stream-focused) */}
+              <div className="hidden md:flex items-center justify-between border-b border-slate-100 pb-3">
                 <h2 className="text-3xl font-black tracking-tight uppercase italic text-slate-900">
                   Season {season}
                 </h2>
@@ -394,29 +573,32 @@ export default function App() {
                 <Heatmap sessions={sessions} isMobile={isMobile} />
               </div>
 
-              {/* Scorecard (Rendered right below each heatmap) */}
+              {/* Compact scorecard: 6 items wide in a single row on desktop */}
               <div className="space-y-4">
                 <div className="px-2">
                   <span className="text-[11px] font-black uppercase text-slate-400 tracking-[0.25em]">
                     Season {season} Scorecard
                   </span>
                 </div>
-                <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
                   {metrics.map((m) => (
                     <div
                       key={m.label}
-                      className="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100 hover:shadow-md transition-all flex items-center space-x-5"
+                      className="bg-white p-4 rounded-[1.5rem] shadow-sm border border-slate-100 hover:shadow-md transition-all flex items-center space-x-3.5"
                     >
                       <div
-                        className={`bg-${m.color}-50 p-3.5 rounded-xl text-${m.color}-600 hidden sm:block`}
+                        className={`bg-${m.color}-50 p-2.5 rounded-xl text-${m.color}-600 hidden sm:block shrink-0`}
                       >
-                        <m.icon size={22} strokeWidth={2.5} />
+                        <m.icon size={18} strokeWidth={2.5} />
                       </div>
-                      <div>
-                        <p className="text-[10px] font-black uppercase text-slate-400 tracking-wider mb-1 leading-none">
+                      <div className="min-w-0">
+                        <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider mb-1 leading-none truncate">
                           {m.label}
                         </p>
-                        <p className="text-lg md:text-xl font-black italic text-slate-900">
+                        <p
+                          className="text-sm md:text-base lg:text-lg font-black italic text-slate-900 leading-snug truncate"
+                          title={m.val.toString()}
+                        >
                           {m.val}
                         </p>
                       </div>
