@@ -60,6 +60,7 @@ const Heatmap = ({
     items: Session[];
     x: number;
     y: number;
+    isWeeklyVol?: boolean;
   } | null>(null);
 
   const dailyData = useMemo(() => {
@@ -74,6 +75,21 @@ const Heatmap = ({
     });
     return map;
   }, [sessions]);
+
+  const weeklyMinsMap = useMemo(() => {
+    const map = new Map<string, number>();
+    sessions.forEach((s) => {
+      const date = new Date(s.date);
+      const mon = d3.utcMonday.floor(date);
+      const key = formatDate(mon);
+      map.set(key, (map.get(key) || 0) + s.durationMinutes);
+    });
+    return map;
+  }, [sessions]);
+
+  const maxWeeklyMins = useMemo(() => {
+    return d3.max(Array.from(weeklyMinsMap.values())) || 1;
+  }, [weeklyMinsMap]);
 
   const dates = useMemo(
     () => sessions.map((s) => new Date(s.date)),
@@ -106,6 +122,11 @@ const Heatmap = ({
       .interpolator(d3.interpolateBlues);
   }, [maxMins]);
 
+  // Define mondays in the main component scope for access in all rendering paths
+  const mondays = useMemo(() => {
+    return d3.utcMondays(gridStart, endDate);
+  }, [gridStart, endDate]);
+
   const cellSize = isMobile ? 36 : 24;
   const cellPadding = 6;
   const totalCellSize = cellSize + cellPadding;
@@ -131,6 +152,34 @@ const Heatmap = ({
     }
   };
 
+  const handleVolMouseEnter = (
+    e: React.MouseEvent<SVGRectElement>,
+    monday: Date,
+    mins: number,
+  ) => {
+    if (isMobile) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const container = e.currentTarget
+      .closest(".heatmap-container")
+      ?.getBoundingClientRect();
+    if (rect && container) {
+      const nextMon = d3.utcDay.offset(monday, 7);
+      const weeklySessions = sessions.filter((s) => {
+        const d = new Date(s.date);
+        return d >= monday && d < nextMon;
+      });
+
+      setActiveTooltip({
+        dateStr: formatDate(monday),
+        mins,
+        items: weeklySessions,
+        x: rect.left - container.left + rect.width / 2,
+        y: rect.top - container.top,
+        isWeeklyVol: true,
+      });
+    }
+  };
+
   const handleMouseLeave = () => {
     if (isMobile) return;
     setActiveTooltip(null);
@@ -151,24 +200,45 @@ const Heatmap = ({
     }
   };
 
+  const handleMobileVolClick = (
+    e: React.MouseEvent,
+    monday: Date,
+    mins: number,
+  ) => {
+    e.stopPropagation();
+    if (mins === 0) return;
+
+    const nextMon = d3.utcDay.offset(monday, 7);
+    const weeklySessions = sessions.filter((s) => {
+      const d = new Date(s.date);
+      return d >= monday && d < nextMon;
+    });
+
+    setActiveTooltip({
+      dateStr: formatDate(monday),
+      mins,
+      items: weeklySessions,
+      x: 0,
+      y: 0,
+      isWeeklyVol: true,
+    });
+  };
+
   // Filter out any trailing weeks that occur completely after the very last service week
   const prunedMondays = useMemo(() => {
-    if (isMobile) {
-      const lastSessionMonday = extent[1]
-        ? d3.utcMonday.floor(extent[1])
-        : new Date();
-      const activeEndDate = d3.utcDay.offset(lastSessionMonday, 7);
-      return d3.utcMondays(gridStart, activeEndDate).reverse();
-    }
-    return [];
-  }, [gridStart, extent, isMobile]);
+    const lastSessionMonday = extent[1]
+      ? d3.utcMonday.floor(extent[1])
+      : new Date();
+    const activeEndDate = d3.utcDay.offset(lastSessionMonday, 7);
+    return d3.utcMondays(gridStart, activeEndDate).reverse();
+  }, [gridStart, extent]);
 
   if (isMobile) {
     return (
       <div className="w-full relative heatmap-container">
         {/* Sticky floating header on mobile that sits directly under page branding bar */}
         <div className="sticky top-[58px] bg-[#fbfcfd]/90 backdrop-blur-md z-35 py-3 -mx-4 px-4 flex justify-between items-center text-[10px] text-slate-400 uppercase font-black border-b border-slate-100 tracking-widest transition-all">
-          <div className="w-20 text-left">Week Range</div>
+          <div className="w-24 text-left">Week Range</div>
           <div className="flex-1 flex justify-between max-w-[280px] mx-auto w-full px-1">
             {["M", "T", "W", "T", "F", "S", "S"].map((d) => (
               <div key={d} style={{ width: cellSize }} className="text-center">
@@ -179,41 +249,73 @@ const Heatmap = ({
         </div>
 
         <div className="space-y-3 pt-3">
-          {prunedMondays.map((monday) => (
-            <div
-              key={monday.toString()}
-              className="flex items-center justify-between"
-            >
-              <div className="w-20 text-[10px] text-slate-300 font-bold leading-tight uppercase tabular-nums">
-                {getWeekRangeLabel(monday)}
+          {prunedMondays.map((monday) => {
+            const mKey = formatDate(monday);
+            const weeklyMins = weeklyMinsMap.get(mKey) || 0;
+            const weeklyHours = (weeklyMins / 60).toFixed(1);
+
+            return (
+              <div
+                key={monday.toString()}
+                className="flex items-center justify-between"
+              >
+                {/* Mobile stacked left column containing week label and refined slate sparkbar */}
+                <div
+                  onClick={(e) => handleMobileVolClick(e, monday, weeklyMins)}
+                  className={`w-24 flex flex-col items-start justify-center pr-2 ${weeklyMins > 0 ? "cursor-pointer active:opacity-75" : ""}`}
+                >
+                  <span className="text-[10px] text-slate-300 font-bold leading-tight uppercase tabular-nums">
+                    {getWeekRangeLabel(monday)}
+                  </span>
+                  {weeklyMins > 0 && (
+                    <div className="flex items-center gap-1.5 mt-1 w-full">
+                      <span className="text-[9px] text-slate-500 font-black tracking-tight shrink-0 whitespace-nowrap leading-none">
+                        {weeklyHours}h
+                      </span>
+                      <div className="h-1 bg-slate-100 rounded-full flex-1 overflow-hidden min-w-[20px]">
+                        <div
+                          className="h-full bg-slate-500 rounded-full"
+                          style={{
+                            width: `${(weeklyMins / maxWeeklyMins) * 100}%`,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex-1 flex justify-between max-w-[280px] mx-auto w-full px-1">
+                  {d3
+                    .utcDays(monday, d3.utcDay.offset(monday, 7))
+                    .map((day) => {
+                      const data = dailyData.get(formatDate(day));
+                      const isInSeason = day >= extent[0] && day <= extent[1];
+                      return (
+                        <div
+                          key={day.toString()}
+                          onClick={(e) =>
+                            handleCellClick(e, formatDate(day), data)
+                          }
+                          className={`rounded-lg transition-all duration-300 border ${
+                            data
+                              ? "cursor-pointer active:scale-95 border-transparent shadow-xs"
+                              : "pointer-events-none border-slate-200/40"
+                          }`}
+                          style={{
+                            width: cellSize,
+                            height: cellSize,
+                            backgroundColor: data
+                              ? colorScale(data.mins)
+                              : "#ffffff",
+                            opacity: isInSeason ? 1 : 0.08,
+                          }}
+                        />
+                      );
+                    })}
+                </div>
               </div>
-              <div className="flex-1 flex justify-between max-w-[280px] mx-auto w-full px-1">
-                {d3.utcDays(monday, d3.utcDay.offset(monday, 7)).map((day) => {
-                  const data = dailyData.get(formatDate(day));
-                  const isInSeason = day >= extent[0] && day <= extent[1];
-                  return (
-                    <div
-                      key={day.toString()}
-                      onClick={(e) => handleCellClick(e, formatDate(day), data)}
-                      className={`rounded-lg transition-all duration-300 border ${
-                        data
-                          ? "cursor-pointer active:scale-95 border-transparent shadow-xs"
-                          : "pointer-events-none border-slate-200/40"
-                      }`}
-                      style={{
-                        width: cellSize,
-                        height: cellSize,
-                        backgroundColor: data
-                          ? colorScale(data.mins)
-                          : "#ffffff",
-                        opacity: isInSeason ? 1 : 0.08,
-                      }}
-                    />
-                  );
-                })}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         {activeTooltip && isMobile && (
@@ -228,16 +330,22 @@ const Heatmap = ({
               <div className="flex justify-between items-start">
                 <div>
                   <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                    Servicemann Session
+                    {activeTooltip.isWeeklyVol
+                      ? "Weekly Summary"
+                      : "Servicemann Session"}
                   </h4>
                   <h3 className="text-xl font-black text-slate-900 leading-tight mt-0.5">
-                    {d3.utcFormat("%A, %b %d, %Y")(
-                      new Date(activeTooltip.dateStr + "T00:00:00Z"),
-                    )}
+                    {activeTooltip.isWeeklyVol
+                      ? `Week of ${d3.utcFormat("%b %d, %Y")(new Date(activeTooltip.dateStr + "T00:00:00Z"))}`
+                      : d3.utcFormat("%A, %b %d, %Y")(
+                          new Date(activeTooltip.dateStr + "T00:00:00Z"),
+                        )}
                   </h3>
                 </div>
                 <div className="bg-blue-50 text-blue-600 px-3 py-1.5 rounded-full text-xs font-black uppercase">
-                  {activeTooltip.mins}m total
+                  {activeTooltip.isWeeklyVol
+                    ? `${(activeTooltip.mins / 60).toFixed(1)}h total`
+                    : `${activeTooltip.mins}m total`}
                 </div>
               </div>
 
@@ -251,7 +359,9 @@ const Heatmap = ({
                   >
                     <div className="flex justify-between items-center gap-2">
                       <span className="text-xs font-black text-slate-500 uppercase tracking-wider">
-                        {item.durationMinutes} mins
+                        {activeTooltip.isWeeklyVol
+                          ? `${item.durationMinutes}m (${d3.utcFormat("%a")(new Date(item.date))})`
+                          : `${item.durationMinutes} mins`}
                       </span>
                       <div className="flex flex-wrap gap-1">
                         {item.tags.map((t) => (
@@ -286,11 +396,12 @@ const Heatmap = ({
     );
   }
 
-  const weeksCount = d3.utcMondays(gridStart, endDate).length;
+  // Desktop horizontal flow
+  const weeksCount = mondays.length;
   const margin = { top: 50, right: 30, bottom: 20, left: 70 };
   const svgWidth =
     (weeksCount + 1) * totalCellSize + margin.left + margin.right;
-  const svgHeight = 7 * totalCellSize + margin.top + margin.bottom;
+  const svgHeight = 7 * totalCellSize + margin.top + margin.bottom + 45;
 
   const monthLabels = d3.utcMonths(startDate, endDate).map((month) => {
     const weekIdx = d3.utcMonday.count(gridStart, month);
@@ -315,17 +426,26 @@ const Heatmap = ({
             </text>
           ))}
 
-          {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d, i) => (
-            <text
-              key={d}
-              x="-15"
-              y={i * totalCellSize + cellSize / 1.4}
-              textAnchor="end"
-              className="fill-slate-400 text-[11px] font-black uppercase tracking-tight"
-            >
-              {d}
-            </text>
-          ))}
+          {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun", "Vol"].map(
+            (d, i) => {
+              const isVol = d === "Vol";
+              const yPos = isVol
+                ? 7 * totalCellSize + 15 + cellSize / 1.4
+                : i * totalCellSize + cellSize / 1.4;
+
+              return (
+                <text
+                  key={d}
+                  x="-15"
+                  y={yPos}
+                  textAnchor="end"
+                  className={`text-[11px] font-black uppercase tracking-tight ${isVol ? "fill-slate-500 font-bold" : "fill-slate-400"}`}
+                >
+                  {d}
+                </text>
+              );
+            },
+          )}
 
           {allDays.map((day) => {
             const weekIdx = d3.utcMonday.count(gridStart, day);
@@ -351,6 +471,50 @@ const Heatmap = ({
               />
             );
           })}
+
+          {mondays.map((monday) => {
+            const mKey = formatDate(monday);
+            const weeklyMins = weeklyMinsMap.get(mKey) || 0;
+            const weekIdx = d3.utcMonday.count(gridStart, monday);
+
+            const xPos = weekIdx * totalCellSize;
+            const trackY = 7 * totalCellSize + 15;
+            const trackHeight = 18;
+            const barHeight =
+              maxWeeklyMins > 0
+                ? (weeklyMins / maxWeeklyMins) * trackHeight
+                : 0;
+            const barY = trackY + trackHeight - barHeight;
+
+            return (
+              <g key={monday.toString()} className="cursor-help">
+                <rect
+                  x={xPos}
+                  y={trackY}
+                  width={cellSize}
+                  height={trackHeight}
+                  rx={4}
+                  fill="#f1f5f9"
+                  onMouseEnter={(e) =>
+                    handleVolMouseEnter(e, monday, weeklyMins)
+                  }
+                  onMouseLeave={handleMouseLeave}
+                />
+                {/* Sleek Charcoal Slate Fill bar matching recommendations (#475569) */}
+                {weeklyMins > 0 && (
+                  <rect
+                    x={xPos}
+                    y={barY}
+                    width={cellSize}
+                    height={barHeight}
+                    rx={4}
+                    fill="#475569"
+                    className="pointer-events-none"
+                  />
+                )}
+              </g>
+            );
+          })}
         </g>
       </svg>
 
@@ -367,48 +531,62 @@ const Heatmap = ({
           <div className="flex justify-between items-start gap-4 mb-2">
             <div>
               <h4 className="text-[9px] font-black text-slate-400 uppercase tracking-widest leading-none">
-                {d3.utcFormat("%A")(
-                  new Date(activeTooltip.dateStr + "T00:00:00Z"),
-                )}
+                {activeTooltip.isWeeklyVol
+                  ? "Weekly Volume"
+                  : d3.utcFormat("%A")(
+                      new Date(activeTooltip.dateStr + "T00:00:00Z"),
+                    )}
               </h4>
               <h3 className="text-sm font-black text-slate-950 mt-1">
-                {d3.utcFormat("%b %d, %Y")(
-                  new Date(activeTooltip.dateStr + "T00:00:00Z"),
-                )}
+                {activeTooltip.isWeeklyVol
+                  ? `Week of ${d3.utcFormat("%b %d, %Y")(new Date(activeTooltip.dateStr + "T00:00:00Z"))}`
+                  : d3.utcFormat("%b %d, %Y")(
+                      new Date(activeTooltip.dateStr + "T00:00:00Z"),
+                    )}
               </h3>
             </div>
             <div className="bg-blue-50 text-blue-600 px-2 py-1 rounded-md text-[10px] font-black uppercase whitespace-nowrap">
-              {activeTooltip.mins}m total
+              {activeTooltip.isWeeklyVol
+                ? `${(activeTooltip.mins / 60).toFixed(1)}h total`
+                : `${activeTooltip.mins}m total`}
             </div>
           </div>
 
           <div className="border-t border-slate-100 my-2"></div>
 
-          <div className="space-y-3">
-            {activeTooltip.items.map((item, idx) => (
-              <div key={idx} className="text-xs space-y-1">
-                <div className="flex justify-between items-start gap-2">
-                  <span className="font-black text-slate-800 uppercase tracking-wide">
-                    {item.durationMinutes} mins
-                  </span>
-                  <div className="flex flex-wrap gap-0.5 justify-end">
-                    {item.tags.map((t) => (
-                      <span
-                        key={t}
-                        className="bg-blue-50 text-blue-600 text-[8px] font-black px-1.5 py-0.5 rounded uppercase"
-                      >
-                        {t}
-                      </span>
-                    ))}
+          <div className="space-y-3 max-h-48 overflow-y-auto pr-1">
+            {activeTooltip.items.length === 0 ? (
+              <p className="text-slate-400 text-xs italic text-center py-2">
+                No activity recorded
+              </p>
+            ) : (
+              activeTooltip.items.map((item, idx) => (
+                <div key={idx} className="text-xs space-y-1">
+                  <div className="flex justify-between items-start gap-2">
+                    <span className="font-black text-slate-800 uppercase tracking-wide">
+                      {activeTooltip.isWeeklyVol
+                        ? `${item.durationMinutes}m (${d3.utcFormat("%a")(new Date(item.date))})`
+                        : `${item.durationMinutes} mins`}
+                    </span>
+                    <div className="flex flex-wrap gap-0.5 justify-end">
+                      {item.tags.map((t) => (
+                        <span
+                          key={t}
+                          className="bg-blue-50 text-blue-600 text-[8px] font-black px-1.5 py-0.5 rounded uppercase"
+                        >
+                          {t}
+                        </span>
+                      ))}
+                    </div>
                   </div>
+                  {item.description && (
+                    <p className="text-slate-600 font-semibold leading-relaxed">
+                      {item.description}
+                    </p>
+                  )}
                 </div>
-                {item.description && (
-                  <p className="text-slate-600 font-semibold leading-relaxed">
-                    {item.description}
-                  </p>
-                )}
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
       )}
@@ -570,8 +748,8 @@ export default function App() {
                 </span>
               </div>
 
-              {/* Visual Heatmap Grid (Compact layout padding) */}
-              <div className="py-0">
+              {/* Visual Heatmap Grid */}
+              <div className="py-2">
                 <Heatmap sessions={sessions} isMobile={isMobile} />
               </div>
 
