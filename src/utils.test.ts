@@ -157,5 +157,24 @@ describe("computeDesktopTimelineLayout", () => {
     assert.equal(layout.monthGroups.length, 7);
     assert.ok(Math.abs(layout.svgWidth - 1140) < 1e-6);
   });
+
+  it("caps early-season cell size at 28px and keeps total width compact for centering", () => {
+    const oneMonth = getSeasonTimelineRange([
+      makeSession("1", "2026-11-13T14:54:26Z", 87),
+      makeSession("2", "2026-11-15T16:27:08Z", 48),
+    ]);
+    const twoMonths = getSeasonTimelineRange([
+      makeSession("1", "2025-11-07T10:00:00Z", 95),
+      makeSession("2", "2025-12-12T10:00:00Z", 60),
+    ]);
+
+    const layout1 = computeDesktopTimelineLayout(oneMonth.mondays, 1140);
+    const layout2 = computeDesktopTimelineLayout(twoMonths.mondays, 1140);
+
+    assert.equal(layout1.cellSize, 28);
+    assert.ok(layout1.svgWidth < 500);
+    assert.equal(layout2.cellSize, 28);
+    assert.ok(layout2.svgWidth < 500);
+  });
 });
 

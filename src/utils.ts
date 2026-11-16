@@ -215,7 +215,7 @@ export function computeDesktopTimelineLayout(
   const denom = weeksCount + intraGaps * intraWeight + interGaps * interWeight;
   const rawUnit = denom > 0 ? availWidth / denom : 24;
 
-  const cellSize = Math.max(20, Math.min(34, rawUnit));
+  const cellSize = Math.max(20, Math.min(28, rawUnit));
   const weekGap = cellSize * intraWeight;
   const monthGap = cellSize * interWeight;
 
