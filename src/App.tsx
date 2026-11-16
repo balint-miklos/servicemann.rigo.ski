@@ -12,55 +12,18 @@ import * as d3 from "d3";
 
 // --- DATA SOURCE ---
 import rawData from "./data/data.json";
-
-// --- TYPES ---
-interface Session {
-  id: string;
-  date: string;
-  durationMinutes: number;
-  description: string;
-  tags: string[];
-}
-
-interface ClockifyData {
-  lastUpdated: string;
-  availableTags: string[];
-  sessions: Session[];
-}
+import {
+  formatDate,
+  formatDuration,
+  getSeasonTimelineRange,
+  getSkiSeason,
+  getWeekRangeLabel,
+  summarizeSeason,
+  type ClockifyData,
+  type Session,
+} from "./utils.ts";
 
 const typedData = rawData as ClockifyData;
-
-// --- UTILS ---
-const getSkiSeason = (dateString: string) => {
-  const d = new Date(dateString);
-  const year = d.getUTCFullYear();
-  const month = d.getUTCMonth();
-  if (month >= 7) {
-    return `${year.toString().slice(-2)}/${(year + 1).toString().slice(-2)}`;
-  } else {
-    return `${(year - 1).toString().slice(-2)}/${year.toString().slice(-2)}`;
-  }
-};
-
-const formatDate = (date: Date) => date.toISOString().split("T")[0];
-
-const formatDuration = (mins: number) => {
-  const rounded = Math.round(mins);
-  if (rounded < 60) return `${rounded}m`;
-  const h = Math.floor(rounded / 60);
-  const m = rounded % 60;
-  return m > 0 ? `${h}h ${m}m` : `${h}h`;
-};
-
-const getWeekRangeLabel = (monday: Date) => {
-  const sunday = d3.utcDay.offset(monday, 6);
-  const monFormat = d3.utcFormat("%b %d");
-  if (monday.getUTCMonth() === sunday.getUTCMonth()) {
-    return `${monFormat(monday)}–${d3.utcFormat("%d")(sunday)}`;
-  } else {
-    return `${monFormat(monday)}–${monFormat(sunday)}`;
-  }
-};
 
 // --- HEATMAP COMPONENT ---
 const Heatmap = ({
@@ -107,47 +70,8 @@ const Heatmap = ({
     return d3.max(Array.from(weeklyMinsMap.values())) || 1;
   }, [weeklyMinsMap]);
 
-  const dates = useMemo(
-    () => sessions.map((s) => new Date(s.date)),
-    [sessions],
-  );
-  const extent = useMemo(() => d3.extent(dates) as [Date, Date], [dates]);
-
-  const startDate = useMemo(
-    () => d3.utcMonth.floor(extent[0] || new Date()),
-    [extent],
-  );
-  const endDate = useMemo(
-    () => d3.utcMonth.ceil(extent[1] || new Date()),
-    [extent],
-  );
-  const gridStart = useMemo(
-    () => d3.utcMonday.floor(extent[0] || new Date()),
-    [extent],
-  );
-  const activeEndDate = useMemo(() => {
-    const lastSessionMonday = extent[1]
-      ? d3.utcMonday.floor(extent[1])
-      : new Date();
-    return d3.utcDay.offset(lastSessionMonday, 7);
-  }, [extent]);
-
-  // Define mondays in the main component scope for access in all rendering paths
-  const mondays = useMemo(() => {
-    return d3.utcMondays(gridStart, endDate);
-  }, [gridStart, endDate]);
-
-  const gridEnd = useMemo(
-    () =>
-      mondays.length > 0
-        ? d3.utcDay.offset(mondays[mondays.length - 1], 7)
-        : endDate,
-    [mondays, endDate],
-  );
-  const allDays = useMemo(
-    () => d3.utcDays(gridStart, gridEnd),
-    [gridStart, gridEnd],
-  );
+  const { startDate, endDate, gridStart, mondays, prunedMondays, allDays } =
+    useMemo(() => getSeasonTimelineRange(sessions), [sessions]);
 
   const maxMins = useMemo(() => {
     return d3.max(Array.from(dailyData.values()), (d) => d.mins) || 1;
@@ -259,11 +183,6 @@ const Heatmap = ({
       isWeeklyVol: true,
     });
   };
-
-  // Filter out any trailing weeks that occur completely after the very last service week
-  const prunedMondays = useMemo(() => {
-    return d3.utcMondays(gridStart, activeEndDate).reverse();
-  }, [gridStart, activeEndDate]);
 
   if (isMobile) {
     return (
@@ -684,94 +603,48 @@ export default function App() {
     );
 
     return sortedSeasons.map(([season, data]) => {
-      const totalSessions = data.sessions.length;
-      const totalDurationStr = formatDuration(data.totalMins);
-      const avgMinutes = totalSessions
-        ? Math.round(data.totalMins / totalSessions)
-        : 0;
-
-      let longestServiceStr = "-";
-      if (totalSessions > 0) {
-        const longest = data.sessions.reduce(
-          (max, curr) =>
-            curr.durationMinutes > max.durationMinutes ? curr : max,
-          data.sessions[0],
-        );
-        const longestDate = d3.utcFormat("%b %d")(new Date(longest.date));
-        longestServiceStr = `${formatDuration(longest.durationMinutes)} (${longestDate})`;
-      }
-
-      let peakMonthStr = "-";
-      if (totalSessions > 0) {
-        const monthGroups = d3.groups(data.sessions, (s) =>
-          d3.utcFormat("%B")(new Date(s.date)),
-        );
-        monthGroups.sort((a, b) => b[1].length - a[1].length);
-        const peakMonthName = monthGroups[0][0];
-        const peakMonthCount = monthGroups[0][1].length;
-        peakMonthStr = `${peakMonthName} (${peakMonthCount} sess.)`;
-      }
-
-      let sessionsPerWeekStr = "-";
-      let timelineWeeksCount = 0;
-      let dateRangeStr = "-";
-      if (totalSessions > 0) {
-        const dates = data.sessions.map((s) => new Date(s.date));
-        const extent = d3.extent(dates) as [Date, Date];
-        const start = d3.utcMonth.floor(extent[0] || new Date());
-        const end = d3.utcMonth.ceil(extent[1] || new Date());
-        const gridStart = d3.utcMonday.floor(start);
-        const metricWeeksCount = d3.utcMondays(gridStart, end).length || 1;
-        sessionsPerWeekStr = `${(totalSessions / metricWeeksCount).toFixed(2)} / wk`;
-
-        const firstSessionMonday = d3.utcMonday.floor(extent[0] || new Date());
-        const lastSessionMonday = d3.utcMonday.floor(extent[1] || new Date());
-        const activeEndDate = d3.utcDay.offset(lastSessionMonday, 7);
-        timelineWeeksCount =
-          d3.utcMondays(firstSessionMonday, activeEndDate).length || 1;
-
-        const monthYearFmt = d3.utcFormat("%b %Y");
-        const startStr = monthYearFmt(extent[0]);
-        const endStr = monthYearFmt(extent[1]);
-        dateRangeStr =
-          startStr === endStr ? startStr : `${startStr} – ${endStr}`;
-      }
+      const summary = summarizeSeason(season, data.sessions, data.totalMins);
 
       return {
         season,
         sessions: data.sessions,
-        weeksCount: timelineWeeksCount,
-        dateRangeStr,
-        totalDurationStr,
+        weeksCount: summary.weeksCount,
+        dateRangeStr: summary.dateRangeStr,
+        totalDurationStr: summary.totalDurationStr,
         metrics: [
           {
             label: "Total Sessions",
-            val: totalSessions,
+            val: summary.totalSessions,
             icon: Activity,
             color: "blue",
           },
           {
             label: "Workshop Time",
-            val: totalDurationStr,
+            val: summary.totalDurationStr,
             icon: Clock,
             color: "emerald",
           },
           {
             label: "Avg Session",
-            val: formatDuration(avgMinutes),
+            val: summary.avgSessionStr,
             icon: TrendingUp,
             color: "indigo",
           },
           {
             label: "Longest Service",
-            val: longestServiceStr,
+            val: summary.longestServiceStr,
             icon: CalendarDays,
             color: "amber",
           },
-          { label: "Peak Month", val: peakMonthStr, icon: Tag, color: "sky" },
+          {
+            label: "Peak Month",
+            val: summary.peakMonthStr,
+            icon: Tag,
+            color: "sky",
+          },
           {
             label: "Sessions / Week",
-            val: sessionsPerWeekStr,
+            val: summary.sessionsPerWeekStr,
             icon: Activity,
             color: "rose",
           },
