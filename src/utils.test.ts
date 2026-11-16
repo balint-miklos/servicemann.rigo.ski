@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  computeDesktopTimelineLayout,
   formatDate,
   formatDuration,
   getSeasonTimelineRange,
@@ -123,3 +124,38 @@ describe("summarizeSeason", () => {
     assert.equal(summary.sessionsPerWeekStr, "0.30 / wk");
   });
 });
+
+describe("computeDesktopTimelineLayout", () => {
+  it("separates consecutive months with a wider inter-month gap than intra-month gap", () => {
+    const { mondays } = getSeasonTimelineRange([
+      makeSession("1", "2025-11-07T10:00:00Z", 95),
+      makeSession("2", "2025-12-12T10:00:00Z", 60),
+    ]);
+
+    const layout = computeDesktopTimelineLayout(mondays, 1140);
+
+    assert.equal(layout.monthGroups.length, 2);
+    assert.equal(layout.monthGroups[0].label, "November");
+    assert.equal(layout.monthGroups[1].label, "December");
+    assert.ok(layout.monthGap > layout.weekGap);
+
+    const decFirstWeek = layout.monthGroups[1].firstWeekIdx;
+    const intraStep = layout.weekX[1] - layout.weekX[0];
+    const interStep = layout.weekX[decFirstWeek] - layout.weekX[decFirstWeek - 1];
+    assert.ok(Math.abs(intraStep - (layout.cellSize + layout.weekGap)) < 1e-6);
+    assert.ok(Math.abs(interStep - (layout.cellSize + layout.monthGap)) < 1e-6);
+  });
+
+  it("fills 100% of container width for a full 7-month season at desktop width", () => {
+    const { mondays } = getSeasonTimelineRange([
+      makeSession("1", "2025-11-07T10:00:00Z", 95),
+      makeSession("2", "2026-05-13T07:09:15Z", 60),
+    ]);
+
+    const layout = computeDesktopTimelineLayout(mondays, 1140);
+
+    assert.equal(layout.monthGroups.length, 7);
+    assert.ok(Math.abs(layout.svgWidth - 1140) < 1e-6);
+  });
+});
+

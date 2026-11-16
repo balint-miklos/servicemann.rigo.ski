@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import {
   Activity,
   Clock,
@@ -13,6 +13,7 @@ import * as d3 from "d3";
 // --- DATA SOURCE ---
 import rawData from "./data/data.json";
 import {
+  computeDesktopTimelineLayout,
   formatDate,
   formatDuration,
   getSeasonTimelineRange,
@@ -70,8 +71,33 @@ const Heatmap = ({
     return d3.max(Array.from(weeklyMinsMap.values())) || 1;
   }, [weeklyMinsMap]);
 
-  const { startDate, endDate, gridStart, mondays, prunedMondays, allDays } =
-    useMemo(() => getSeasonTimelineRange(sessions), [sessions]);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState(1140);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const w = Math.floor(entry.contentRect.width);
+        if (w > 0) {
+          setContainerWidth((prev) => (prev !== w ? w : prev));
+        }
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [isMobile]);
+
+  const { gridStart, mondays, prunedMondays, allDays } = useMemo(
+    () => getSeasonTimelineRange(sessions),
+    [sessions],
+  );
+
+  const desktopLayout = useMemo(
+    () => computeDesktopTimelineLayout(mondays, containerWidth),
+    [mondays, containerWidth],
+  );
 
   const maxMins = useMemo(() => {
     return d3.max(Array.from(dailyData.values()), (d) => d.mins) || 1;
@@ -83,9 +109,7 @@ const Heatmap = ({
       .domain([0, maxMins]);
   }, [maxMins]);
 
-  const cellSize = isMobile ? 36 : 24;
-  const cellPadding = 6;
-  const totalCellSize = cellSize + cellPadding;
+  const mobileCellSize = 36;
 
   const handleMouseEnter = (
     e: React.MouseEvent<SVGRectElement>,
@@ -192,7 +216,11 @@ const Heatmap = ({
           <div className="w-24 text-left">Week Range</div>
           <div className="flex-1 flex justify-between max-w-[280px] mx-auto w-full px-1">
             {["M", "T", "W", "T", "F", "S", "S"].map((d) => (
-              <div key={d} style={{ width: cellSize }} className="text-center">
+              <div
+                key={d}
+                style={{ width: mobileCellSize }}
+                className="text-center"
+              >
                 {d}
               </div>
             ))}
@@ -255,8 +283,8 @@ const Heatmap = ({
                               : "pointer-events-none border-slate-200/90"
                           }`}
                           style={{
-                            width: cellSize,
-                            height: cellSize,
+                            width: mobileCellSize,
+                            height: mobileCellSize,
                             backgroundColor: data
                               ? colorScale(data.mins)
                               : "#f8fafc",
@@ -346,43 +374,37 @@ const Heatmap = ({
     );
   }
 
-  // Desktop horizontal flow
-  const weeksCount = mondays.length;
-  const margin = { top: 50, right: 30, bottom: 20, left: 70 };
-  const svgWidth =
-    (weeksCount + 1) * totalCellSize + margin.left + margin.right;
-  const volTrackY = 7 * totalCellSize + 14;
-  const volTrackHeight = 54;
-  const svgHeight =
-    7 * totalCellSize + margin.top + margin.bottom + volTrackHeight + 20;
-
-  const monthLabels = d3
-    .utcMonths(startDate, endDate)
-    .map((month) => {
-      const weekIdx = Math.max(0, d3.utcMonday.count(gridStart, month));
-      return {
-        label: d3.utcFormat("%B")(month),
-        weekIdx,
-        x: weekIdx * totalCellSize,
-      };
-    })
-    .filter(
-      (item, idx, arr) =>
-        idx === arr.length - 1 || item.weekIdx !== arr[idx + 1].weekIdx,
-    );
+  // Desktop elastic horizontal flow
+  const {
+    margin,
+    cellSize,
+    rowPitch,
+    volTrackY,
+    volTrackHeight,
+    svgWidth,
+    svgHeight,
+    monthGroups,
+    weekX,
+  } = desktopLayout;
+  const cellRx = Math.round(cellSize * 0.26);
 
   return (
-    <div className="w-full overflow-x-auto py-6 relative scrollbar-hide heatmap-container">
+    <div
+      ref={containerRef}
+      className="w-full overflow-x-auto py-6 relative scrollbar-hide heatmap-container"
+    >
       <svg width={svgWidth} height={svgHeight} className="mx-auto block">
         <g transform={`translate(${margin.left}, ${margin.top})`}>
-          {monthLabels.map((m, i) => (
+          {monthGroups.map((m, i) => (
             <text
-              key={i}
+              key={m.key}
               x={m.x}
               y="-20"
               className="fill-slate-500 text-[13px] font-black uppercase tracking-[0.25em]"
             >
-              {m.label}
+              {m.width < 85 && i < monthGroups.length - 1
+                ? m.shortLabel
+                : m.label}
             </text>
           ))}
 
@@ -391,7 +413,7 @@ const Heatmap = ({
               const isVol = d === "Vol";
               const yPos = isVol
                 ? volTrackY + volTrackHeight / 2 + 4
-                : i * totalCellSize + cellSize / 1.4;
+                : i * rowPitch + cellSize / 1.4;
 
               return (
                 <text
@@ -409,17 +431,18 @@ const Heatmap = ({
 
           {allDays.map((day) => {
             const weekIdx = d3.utcMonday.count(gridStart, day);
+            if (weekIdx < 0 || weekIdx >= weekX.length) return null;
             const dayIdx = (day.getUTCDay() + 6) % 7;
             const data = dailyData.get(formatDate(day));
 
             return (
               <rect
                 key={day.toString()}
-                x={weekIdx * totalCellSize}
-                y={dayIdx * totalCellSize}
+                x={weekX[weekIdx]}
+                y={dayIdx * rowPitch}
                 width={cellSize}
                 height={cellSize}
-                rx={7}
+                rx={cellRx}
                 fill={data ? colorScale(data.mins) : "#f8fafc"}
                 onMouseEnter={(e) => handleMouseEnter(e, formatDate(day), data)}
                 onMouseLeave={handleMouseLeave}
@@ -430,12 +453,11 @@ const Heatmap = ({
             );
           })}
 
-          {mondays.map((monday) => {
+          {mondays.map((monday, weekIdx) => {
             const mKey = formatDate(monday);
             const weeklyMins = weeklyMinsMap.get(mKey) || 0;
-            const weekIdx = d3.utcMonday.count(gridStart, monday);
 
-            const xPos = weekIdx * totalCellSize;
+            const xPos = weekX[weekIdx];
             const barHeight =
               weeklyMins > 0 && maxWeeklyMins > 0
                 ? Math.max(4, (weeklyMins / maxWeeklyMins) * volTrackHeight)

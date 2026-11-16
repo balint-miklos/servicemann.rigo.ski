@@ -144,3 +144,112 @@ export function summarizeSeason(
     dateRangeStr,
   };
 }
+
+export interface DesktopMonthGroup {
+  key: string;
+  label: string;
+  shortLabel: string;
+  monthIndex: number;
+  firstWeekIdx: number;
+  weekCount: number;
+  x: number;
+  width: number;
+}
+
+export interface DesktopTimelineLayout {
+  margin: { top: number; right: number; bottom: number; left: number };
+  cellSize: number;
+  weekGap: number;
+  monthGap: number;
+  rowPitch: number;
+  volTrackY: number;
+  volTrackHeight: number;
+  svgWidth: number;
+  svgHeight: number;
+  monthGroups: DesktopMonthGroup[];
+  weekMonthIndex: number[];
+  weekX: number[];
+}
+
+export function computeDesktopTimelineLayout(
+  mondays: Date[],
+  containerWidth: number,
+): DesktopTimelineLayout {
+  const margin = { top: 50, right: 20, bottom: 20, left: 56 };
+  const monthFmt = d3.utcFormat("%B");
+  const shortFmt = d3.utcFormat("%b");
+  const keyFmt = d3.utcFormat("%Y-%m");
+
+  const monthGroups: DesktopMonthGroup[] = [];
+  const weekMonthIndex: number[] = [];
+
+  mondays.forEach((monday, idx) => {
+    const key = keyFmt(monday);
+    const lastGroup = monthGroups[monthGroups.length - 1];
+
+    if (!lastGroup || lastGroup.key !== key) {
+      monthGroups.push({
+        key,
+        label: monthFmt(monday),
+        shortLabel: shortFmt(monday),
+        monthIndex: monthGroups.length,
+        firstWeekIdx: idx,
+        weekCount: 1,
+        x: 0,
+        width: 0,
+      });
+    } else {
+      lastGroup.weekCount += 1;
+    }
+
+    weekMonthIndex.push(monthGroups.length - 1);
+  });
+
+  const weeksCount = mondays.length;
+  const monthsCount = monthGroups.length;
+  const availWidth = Math.max(300, containerWidth - margin.left - margin.right);
+  const intraGaps = Math.max(0, weeksCount - monthsCount);
+  const interGaps = Math.max(0, monthsCount - 1);
+  const intraWeight = 0.24;
+  const interWeight = 0.85;
+  const denom = weeksCount + intraGaps * intraWeight + interGaps * interWeight;
+  const rawUnit = denom > 0 ? availWidth / denom : 24;
+
+  const cellSize = Math.max(20, Math.min(34, rawUnit));
+  const weekGap = cellSize * intraWeight;
+  const monthGap = cellSize * interWeight;
+
+  const weekX = mondays.map((_, idx) => {
+    const mIdx = weekMonthIndex[idx];
+    return idx * cellSize + (idx - mIdx) * weekGap + mIdx * monthGap;
+  });
+
+  monthGroups.forEach((group) => {
+    const firstX = weekX[group.firstWeekIdx] ?? 0;
+    const lastIdx = group.firstWeekIdx + group.weekCount - 1;
+    const lastX = weekX[lastIdx] ?? firstX;
+    group.x = firstX;
+    group.width = lastX + cellSize - firstX;
+  });
+
+  const contentWidth = weeksCount > 0 ? weekX[weeksCount - 1] + cellSize : 0;
+  const rowPitch = cellSize + Math.min(7, Math.max(5, cellSize * 0.22));
+  const volTrackY = 7 * rowPitch + 12;
+  const volTrackHeight = Math.round(cellSize * 2.1);
+
+  return {
+    margin,
+    cellSize,
+    weekGap,
+    monthGap,
+    rowPitch,
+    volTrackY,
+    volTrackHeight,
+    svgWidth: contentWidth + margin.left + margin.right,
+    svgHeight: volTrackY + volTrackHeight + margin.top + margin.bottom,
+    monthGroups,
+    weekMonthIndex,
+    weekX,
+  };
+}
+
