@@ -1,5 +1,13 @@
 import { useMemo, useState, useEffect } from "react";
-import { Activity, Clock, Tag, CalendarDays, TrendingUp } from "lucide-react";
+import {
+  Activity,
+  Clock,
+  Tag,
+  CalendarDays,
+  TrendingUp,
+  ChevronDown,
+  ChevronUp,
+} from "lucide-react";
 import * as d3 from "d3";
 
 // --- DATA SOURCE ---
@@ -35,6 +43,14 @@ const getSkiSeason = (dateString: string) => {
 };
 
 const formatDate = (date: Date) => date.toISOString().split("T")[0];
+
+const formatDuration = (mins: number) => {
+  const rounded = Math.round(mins);
+  if (rounded < 60) return `${rounded}m`;
+  const h = Math.floor(rounded / 60);
+  const m = rounded % 60;
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+};
 
 const getWeekRangeLabel = (monday: Date) => {
   const sunday = d3.utcDay.offset(monday, 6);
@@ -105,10 +121,32 @@ const Heatmap = ({
     () => d3.utcMonth.ceil(extent[1] || new Date()),
     [extent],
   );
-  const gridStart = useMemo(() => d3.utcMonday.floor(startDate), [startDate]);
+  const gridStart = useMemo(
+    () => d3.utcMonday.floor(extent[0] || new Date()),
+    [extent],
+  );
+  const activeEndDate = useMemo(() => {
+    const lastSessionMonday = extent[1]
+      ? d3.utcMonday.floor(extent[1])
+      : new Date();
+    return d3.utcDay.offset(lastSessionMonday, 7);
+  }, [extent]);
+
+  // Define mondays in the main component scope for access in all rendering paths
+  const mondays = useMemo(() => {
+    return d3.utcMondays(gridStart, endDate);
+  }, [gridStart, endDate]);
+
+  const gridEnd = useMemo(
+    () =>
+      mondays.length > 0
+        ? d3.utcDay.offset(mondays[mondays.length - 1], 7)
+        : endDate,
+    [mondays, endDate],
+  );
   const allDays = useMemo(
-    () => d3.utcDays(startDate, endDate),
-    [startDate, endDate],
+    () => d3.utcDays(gridStart, gridEnd),
+    [gridStart, gridEnd],
   );
 
   const maxMins = useMemo(() => {
@@ -117,15 +155,9 @@ const Heatmap = ({
 
   const colorScale = useMemo(() => {
     return d3
-      .scaleSequential()
-      .domain([0, maxMins])
-      .interpolator(d3.interpolateBlues);
+      .scaleSequential((t) => d3.interpolateBlues(0.22 + t * 0.78))
+      .domain([0, maxMins]);
   }, [maxMins]);
-
-  // Define mondays in the main component scope for access in all rendering paths
-  const mondays = useMemo(() => {
-    return d3.utcMondays(gridStart, endDate);
-  }, [gridStart, endDate]);
 
   const cellSize = isMobile ? 36 : 24;
   const cellPadding = 6;
@@ -134,7 +166,7 @@ const Heatmap = ({
   const handleMouseEnter = (
     e: React.MouseEvent<SVGRectElement>,
     dateStr: string,
-    data: any,
+    data?: { mins: number; items: Session[] },
   ) => {
     if (!data || isMobile) return;
     const rect = e.currentTarget.getBoundingClientRect();
@@ -185,7 +217,11 @@ const Heatmap = ({
     setActiveTooltip(null);
   };
 
-  const handleCellClick = (e: React.MouseEvent, dateStr: string, data: any) => {
+  const handleCellClick = (
+    e: React.MouseEvent,
+    dateStr: string,
+    data?: { mins: number; items: Session[] },
+  ) => {
     e.stopPropagation();
     if (!data) return;
 
@@ -226,12 +262,8 @@ const Heatmap = ({
 
   // Filter out any trailing weeks that occur completely after the very last service week
   const prunedMondays = useMemo(() => {
-    const lastSessionMonday = extent[1]
-      ? d3.utcMonday.floor(extent[1])
-      : new Date();
-    const activeEndDate = d3.utcDay.offset(lastSessionMonday, 7);
     return d3.utcMondays(gridStart, activeEndDate).reverse();
-  }, [gridStart, extent]);
+  }, [gridStart, activeEndDate]);
 
   if (isMobile) {
     return (
@@ -252,7 +284,6 @@ const Heatmap = ({
           {prunedMondays.map((monday) => {
             const mKey = formatDate(monday);
             const weeklyMins = weeklyMinsMap.get(mKey) || 0;
-            const weeklyHours = (weeklyMins / 60).toFixed(1);
 
             return (
               <div
@@ -264,13 +295,17 @@ const Heatmap = ({
                   onClick={(e) => handleMobileVolClick(e, monday, weeklyMins)}
                   className={`w-24 flex flex-col items-start justify-center pr-2 ${weeklyMins > 0 ? "cursor-pointer active:opacity-75" : ""}`}
                 >
-                  <span className="text-[10px] text-slate-300 font-bold leading-tight uppercase tabular-nums">
+                  <span
+                    className={`text-[10px] font-bold leading-tight uppercase tabular-nums ${
+                      weeklyMins > 0 ? "text-slate-400" : "text-slate-300"
+                    }`}
+                  >
                     {getWeekRangeLabel(monday)}
                   </span>
                   {weeklyMins > 0 && (
                     <div className="flex items-center gap-1.5 mt-1 w-full">
                       <span className="text-[9px] text-slate-500 font-black tracking-tight shrink-0 whitespace-nowrap leading-none">
-                        {weeklyHours}h
+                        {formatDuration(weeklyMins)}
                       </span>
                       <div className="h-1 bg-slate-100 rounded-full flex-1 overflow-hidden min-w-[20px]">
                         <div
@@ -289,7 +324,6 @@ const Heatmap = ({
                     .utcDays(monday, d3.utcDay.offset(monday, 7))
                     .map((day) => {
                       const data = dailyData.get(formatDate(day));
-                      const isInSeason = day >= extent[0] && day <= extent[1];
                       return (
                         <div
                           key={day.toString()}
@@ -299,15 +333,14 @@ const Heatmap = ({
                           className={`rounded-lg transition-all duration-300 border ${
                             data
                               ? "cursor-pointer active:scale-95 border-transparent shadow-xs"
-                              : "pointer-events-none border-slate-200/40"
+                              : "pointer-events-none border-slate-200/90"
                           }`}
                           style={{
                             width: cellSize,
                             height: cellSize,
                             backgroundColor: data
                               ? colorScale(data.mins)
-                              : "#ffffff",
-                            opacity: isInSeason ? 1 : 0.08,
+                              : "#f8fafc",
                           }}
                         />
                       );
@@ -343,9 +376,7 @@ const Heatmap = ({
                   </h3>
                 </div>
                 <div className="bg-blue-50 text-blue-600 px-3 py-1.5 rounded-full text-xs font-black uppercase">
-                  {activeTooltip.isWeeklyVol
-                    ? `${(activeTooltip.mins / 60).toFixed(1)}h total`
-                    : `${activeTooltip.mins}m total`}
+                  {formatDuration(activeTooltip.mins)} total
                 </div>
               </div>
 
@@ -360,8 +391,8 @@ const Heatmap = ({
                     <div className="flex justify-between items-center gap-2">
                       <span className="text-xs font-black text-slate-500 uppercase tracking-wider">
                         {activeTooltip.isWeeklyVol
-                          ? `${item.durationMinutes}m (${d3.utcFormat("%a")(new Date(item.date))})`
-                          : `${item.durationMinutes} mins`}
+                          ? `${formatDuration(item.durationMinutes)} (${d3.utcFormat("%a")(new Date(item.date))})`
+                          : formatDuration(item.durationMinutes)}
                       </span>
                       <div className="flex flex-wrap gap-1">
                         {item.tags.map((t) => (
@@ -401,15 +432,25 @@ const Heatmap = ({
   const margin = { top: 50, right: 30, bottom: 20, left: 70 };
   const svgWidth =
     (weeksCount + 1) * totalCellSize + margin.left + margin.right;
-  const svgHeight = 7 * totalCellSize + margin.top + margin.bottom + 45;
+  const volTrackY = 7 * totalCellSize + 14;
+  const volTrackHeight = 54;
+  const svgHeight =
+    7 * totalCellSize + margin.top + margin.bottom + volTrackHeight + 20;
 
-  const monthLabels = d3.utcMonths(startDate, endDate).map((month) => {
-    const weekIdx = d3.utcMonday.count(gridStart, month);
-    return {
-      label: d3.utcFormat("%B")(month),
-      x: weekIdx * totalCellSize,
-    };
-  });
+  const monthLabels = d3
+    .utcMonths(startDate, endDate)
+    .map((month) => {
+      const weekIdx = Math.max(0, d3.utcMonday.count(gridStart, month));
+      return {
+        label: d3.utcFormat("%B")(month),
+        weekIdx,
+        x: weekIdx * totalCellSize,
+      };
+    })
+    .filter(
+      (item, idx, arr) =>
+        idx === arr.length - 1 || item.weekIdx !== arr[idx + 1].weekIdx,
+    );
 
   return (
     <div className="w-full overflow-x-auto py-6 relative scrollbar-hide heatmap-container">
@@ -430,7 +471,7 @@ const Heatmap = ({
             (d, i) => {
               const isVol = d === "Vol";
               const yPos = isVol
-                ? 7 * totalCellSize + 15 + cellSize / 1.4
+                ? volTrackY + volTrackHeight / 2 + 4
                 : i * totalCellSize + cellSize / 1.4;
 
               return (
@@ -451,7 +492,6 @@ const Heatmap = ({
             const weekIdx = d3.utcMonday.count(gridStart, day);
             const dayIdx = (day.getUTCDay() + 6) % 7;
             const data = dailyData.get(formatDate(day));
-            const isInSeason = day >= extent[0] && day <= extent[1];
 
             return (
               <rect
@@ -461,13 +501,12 @@ const Heatmap = ({
                 width={cellSize}
                 height={cellSize}
                 rx={7}
-                fill={data ? colorScale(data.mins) : "#ffffff"}
+                fill={data ? colorScale(data.mins) : "#f8fafc"}
                 onMouseEnter={(e) => handleMouseEnter(e, formatDate(day), data)}
                 onMouseLeave={handleMouseLeave}
                 className="transition-all duration-300 hover:stroke-blue-400 hover:stroke-[3px] cursor-help"
                 stroke={data ? "none" : "#e2e8f0"}
                 strokeWidth={data ? 0 : 1}
-                opacity={isInSeason ? 1 : 0.15}
               />
             );
           })}
@@ -478,22 +517,20 @@ const Heatmap = ({
             const weekIdx = d3.utcMonday.count(gridStart, monday);
 
             const xPos = weekIdx * totalCellSize;
-            const trackY = 7 * totalCellSize + 15;
-            const trackHeight = 18;
             const barHeight =
-              maxWeeklyMins > 0
-                ? (weeklyMins / maxWeeklyMins) * trackHeight
+              weeklyMins > 0 && maxWeeklyMins > 0
+                ? Math.max(4, (weeklyMins / maxWeeklyMins) * volTrackHeight)
                 : 0;
-            const barY = trackY + trackHeight - barHeight;
+            const barY = volTrackY + volTrackHeight - barHeight;
 
             return (
               <g key={monday.toString()} className="cursor-help">
                 <rect
                   x={xPos}
-                  y={trackY}
+                  y={volTrackY}
                   width={cellSize}
-                  height={trackHeight}
-                  rx={4}
+                  height={volTrackHeight}
+                  rx={5}
                   fill="#f1f5f9"
                   onMouseEnter={(e) =>
                     handleVolMouseEnter(e, monday, weeklyMins)
@@ -507,7 +544,7 @@ const Heatmap = ({
                     y={barY}
                     width={cellSize}
                     height={barHeight}
-                    rx={4}
+                    rx={5}
                     fill="#475569"
                     className="pointer-events-none"
                   />
@@ -546,9 +583,7 @@ const Heatmap = ({
               </h3>
             </div>
             <div className="bg-blue-50 text-blue-600 px-2 py-1 rounded-md text-[10px] font-black uppercase whitespace-nowrap">
-              {activeTooltip.isWeeklyVol
-                ? `${(activeTooltip.mins / 60).toFixed(1)}h total`
-                : `${activeTooltip.mins}m total`}
+              {formatDuration(activeTooltip.mins)} total
             </div>
           </div>
 
@@ -565,8 +600,8 @@ const Heatmap = ({
                   <div className="flex justify-between items-start gap-2">
                     <span className="font-black text-slate-800 uppercase tracking-wide">
                       {activeTooltip.isWeeklyVol
-                        ? `${item.durationMinutes}m (${d3.utcFormat("%a")(new Date(item.date))})`
-                        : `${item.durationMinutes} mins`}
+                        ? `${formatDuration(item.durationMinutes)} (${d3.utcFormat("%a")(new Date(item.date))})`
+                        : formatDuration(item.durationMinutes)}
                     </span>
                     <div className="flex flex-wrap gap-0.5 justify-end">
                       {item.tags.map((t) => (
@@ -597,6 +632,16 @@ const Heatmap = ({
 // --- MAIN APP ---
 export default function App() {
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [expandedTimelines, setExpandedTimelines] = useState<
+    Record<string, boolean>
+  >({});
+
+  const toggleSeasonTimeline = (season: string) => {
+    setExpandedTimelines((prev) => ({
+      ...prev,
+      [season]: !prev[season],
+    }));
+  };
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768);
@@ -640,7 +685,7 @@ export default function App() {
 
     return sortedSeasons.map(([season, data]) => {
       const totalSessions = data.sessions.length;
-      const totalHours = (data.totalMins / 60).toFixed(1);
+      const totalDurationStr = formatDuration(data.totalMins);
       const avgMinutes = totalSessions
         ? Math.round(data.totalMins / totalSessions)
         : 0;
@@ -653,7 +698,7 @@ export default function App() {
           data.sessions[0],
         );
         const longestDate = d3.utcFormat("%b %d")(new Date(longest.date));
-        longestServiceStr = `${longest.durationMinutes}m (${longestDate})`;
+        longestServiceStr = `${formatDuration(longest.durationMinutes)} (${longestDate})`;
       }
 
       let peakMonthStr = "-";
@@ -668,19 +713,36 @@ export default function App() {
       }
 
       let sessionsPerWeekStr = "-";
+      let timelineWeeksCount = 0;
+      let dateRangeStr = "-";
       if (totalSessions > 0) {
         const dates = data.sessions.map((s) => new Date(s.date));
         const extent = d3.extent(dates) as [Date, Date];
         const start = d3.utcMonth.floor(extent[0] || new Date());
         const end = d3.utcMonth.ceil(extent[1] || new Date());
         const gridStart = d3.utcMonday.floor(start);
-        const weeksCount = d3.utcMondays(gridStart, end).length || 1;
-        sessionsPerWeekStr = `${(totalSessions / weeksCount).toFixed(2)} / wk`;
+        const metricWeeksCount = d3.utcMondays(gridStart, end).length || 1;
+        sessionsPerWeekStr = `${(totalSessions / metricWeeksCount).toFixed(2)} / wk`;
+
+        const firstSessionMonday = d3.utcMonday.floor(extent[0] || new Date());
+        const lastSessionMonday = d3.utcMonday.floor(extent[1] || new Date());
+        const activeEndDate = d3.utcDay.offset(lastSessionMonday, 7);
+        timelineWeeksCount =
+          d3.utcMondays(firstSessionMonday, activeEndDate).length || 1;
+
+        const monthYearFmt = d3.utcFormat("%b %Y");
+        const startStr = monthYearFmt(extent[0]);
+        const endStr = monthYearFmt(extent[1]);
+        dateRangeStr =
+          startStr === endStr ? startStr : `${startStr} – ${endStr}`;
       }
 
       return {
         season,
         sessions: data.sessions,
+        weeksCount: timelineWeeksCount,
+        dateRangeStr,
+        totalDurationStr,
         metrics: [
           {
             label: "Total Sessions",
@@ -690,13 +752,13 @@ export default function App() {
           },
           {
             label: "Workshop Time",
-            val: `${totalHours}h`,
+            val: totalDurationStr,
             icon: Clock,
             color: "emerald",
           },
           {
             label: "Avg Session",
-            val: `${avgMinutes}m`,
+            val: formatDuration(avgMinutes),
             icon: TrendingUp,
             color: "indigo",
           },
@@ -735,59 +797,133 @@ export default function App() {
         </header>
 
         {/* Live Workshop Activity Feed */}
-        <div className="space-y-10 md:space-y-16">
-          {seasonsData.map(({ season, sessions, metrics }) => (
-            <section key={season} className="space-y-6 md:space-y-8">
-              {/* Season Section Title (Desktop-only to keep mobile completely stream-focused) */}
-              <div className="hidden md:flex items-center justify-between border-b border-slate-100 pb-3">
-                <h2 className="text-3xl font-black tracking-tight uppercase italic text-slate-900">
-                  Season {season}
-                </h2>
-                <span className="bg-slate-100 text-slate-500 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-widest">
-                  {sessions.length} sessions
-                </span>
-              </div>
+        <div className="space-y-10 md:space-y-16 pb-8">
+          {seasonsData.map(
+            (
+              {
+                season,
+                sessions,
+                metrics,
+                weeksCount,
+                dateRangeStr,
+                totalDurationStr,
+              },
+              index,
+            ) => {
+              const isPreviousSeason = index > 0;
+              const isTimelineExpanded =
+                !isPreviousSeason || !!expandedTimelines[season];
 
-              {/* Visual Heatmap Grid */}
-              <div className="py-2">
-                <Heatmap sessions={sessions} isMobile={isMobile} />
-              </div>
-
-              {/* Scorecard: 6 items wide in a single row on desktop */}
-              <div className="space-y-4 pt-4 md:pt-0">
-                <div className="px-2">
-                  <span className="text-[11px] font-black uppercase text-slate-400 tracking-[0.25em]">
-                    Season {season} Scorecard
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-                  {metrics.map((m) => (
-                    <div
-                      key={m.label}
-                      className="bg-white p-4 rounded-[1.5rem] shadow-sm border border-slate-100 hover:shadow-md transition-all flex items-center space-x-3.5"
-                    >
-                      <div
-                        className={`bg-${m.color}-50 p-2.5 rounded-xl text-${m.color}-600 hidden sm:block shrink-0`}
-                      >
-                        <m.icon size={18} strokeWidth={2.5} />
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider mb-1 leading-none truncate">
-                          {m.label}
-                        </p>
-                        <p
-                          className="text-sm md:text-base lg:text-lg font-black italic text-slate-900 leading-snug truncate"
-                          title={m.val.toString()}
-                        >
-                          {m.val}
-                        </p>
+              return (
+                <section key={season} className="space-y-6 md:space-y-8">
+                  {isPreviousSeason ? (
+                    <div className="pt-6 md:pt-10">
+                      <div className="flex items-center gap-3 mb-6">
+                        <div className="h-px bg-slate-200 flex-1" />
+                        <span className="text-[11px] font-black uppercase tracking-[0.25em] text-slate-400 bg-slate-100/80 px-3.5 py-1 rounded-full border border-slate-200/60">
+                          Season {season}
+                        </span>
+                        <div className="h-px bg-slate-200 flex-1" />
                       </div>
                     </div>
-                  ))}
-                </div>
-              </div>
-            </section>
-          ))}
+                  ) : (
+                    /* Season Section Title (Desktop-only to keep mobile completely stream-focused) */
+                    <div className="hidden md:flex items-center justify-between border-b border-slate-100 pb-3">
+                      <h2 className="text-3xl font-black tracking-tight uppercase italic text-slate-900">
+                        Season {season}
+                      </h2>
+                      <span className="bg-slate-100 text-slate-500 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-widest">
+                        {sessions.length} sessions
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Visual Heatmap Grid (Expanded for current season, collapsible for previous seasons) */}
+                  {isPreviousSeason ? (
+                    <div className="bg-white rounded-[1.5rem] border border-slate-200/80 shadow-xs overflow-hidden transition-all">
+                      <button
+                        type="button"
+                        onClick={() => toggleSeasonTimeline(season)}
+                        className="w-full p-4 flex items-center justify-between text-left hover:bg-slate-50/60 active:bg-slate-100/50 transition-colors cursor-pointer"
+                      >
+                        <div className="flex items-center gap-3.5 min-w-0">
+                          <div className="bg-slate-100 text-slate-600 p-2.5 rounded-xl shrink-0">
+                            <CalendarDays size={18} strokeWidth={2.5} />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-xs md:text-sm font-black uppercase italic text-slate-900 tracking-tight truncate">
+                              Season {season} Timeline
+                            </p>
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider truncate mt-0.5">
+                              {dateRangeStr} • {weeksCount}{" "}
+                              {weeksCount === 1 ? "week" : "weeks"} •{" "}
+                              {sessions.length}{" "}
+                              {sessions.length === 1 ? "session" : "sessions"} (
+                              {totalDurationStr})
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1.5 bg-slate-100 text-slate-600 px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-wider shrink-0 ml-3">
+                          <span>
+                            {isTimelineExpanded ? "Hide" : "Timeline"}
+                          </span>
+                          {isTimelineExpanded ? (
+                            <ChevronUp size={14} strokeWidth={2.5} />
+                          ) : (
+                            <ChevronDown size={14} strokeWidth={2.5} />
+                          )}
+                        </div>
+                      </button>
+
+                      {isTimelineExpanded && (
+                        <div className="px-4 pb-5 pt-2 border-t border-slate-100">
+                          <Heatmap sessions={sessions} isMobile={isMobile} />
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="py-2">
+                      <Heatmap sessions={sessions} isMobile={isMobile} />
+                    </div>
+                  )}
+
+                  {/* Scorecard: 6 items wide in a single row on desktop */}
+                  <div className="space-y-4 pt-4 md:pt-0">
+                    <div className="px-2">
+                      <span className="text-[11px] font-black uppercase text-slate-400 tracking-[0.25em]">
+                        Season {season} Scorecard
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                      {metrics.map((m) => (
+                        <div
+                          key={m.label}
+                          className="bg-white p-4 rounded-[1.5rem] shadow-sm border border-slate-100 hover:shadow-md transition-all flex items-center space-x-3.5"
+                        >
+                          <div
+                            className={`bg-${m.color}-50 p-2.5 rounded-xl text-${m.color}-600 hidden sm:block shrink-0`}
+                          >
+                            <m.icon size={18} strokeWidth={2.5} />
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-[9px] font-black uppercase text-slate-400 tracking-wider mb-1 leading-none truncate">
+                              {m.label}
+                            </p>
+                            <p
+                              className="text-sm md:text-base lg:text-lg font-black italic text-slate-900 leading-snug truncate"
+                              title={m.val.toString()}
+                            >
+                              {m.val}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </section>
+              );
+            },
+          )}
         </div>
       </div>
     </div>
